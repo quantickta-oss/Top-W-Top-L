@@ -41,62 +41,77 @@
   <main class="main-content">
 
     <!-- =====================================================
-         BRANCH DESK
+         BRANCH IMPORT DESK — IMPORT ONLY
          ===================================================== -->
     <div id="view-matrix" class="view-panel active">
       <div class="header-container">
         <div>
           <div class="eyebrow" id="matrix-week-label"></div>
-          <h1 id="matrix-title">AWADA — Daily P/L &amp; Coverage Desk</h1>
-          <p class="subtitle">Import the one-day MT5 Summary and the longer Coverage History. The report date is detected automatically.</p>
+          <h1 id="matrix-title">AWADA — Shift Import Desk</h1>
+          <p class="subtitle">No manual P/L entry. Import the MT5 Summary + Coverage History three times per day: ON, AM and PM.</p>
         </div>
-        <div class="header-chip">DAILY IMPORT = EXECUTIVE SOURCE OF TRUTH</div>
+        <div class="header-chip">IMPORT ONLY · ALL SHIFTS SAVED</div>
       </div>
 
-      <!-- DAILY SOURCE OF TRUTH IMPORT -->
       <section class="import-card">
         <div class="import-card-header">
           <div>
-            <div class="eyebrow">DAILY SOURCE OF TRUTH</div>
-            <h2>MT5 Summary + Coverage History</h2>
+            <div class="eyebrow">SHIFT SOURCE OF TRUTH</div>
+            <h2>Import ON / AM / PM</h2>
             <p>
-              The Summary determines the report date automatically. The complete Coverage History is read for client comments,
-              but only positions closed on that detected date are counted. Coverage P/L uses Profit only.
+              The Summary date is detected automatically. Client P/L is calculated as the change between cumulative Summary snapshots.
+              Coverage uses only closed <strong>OUT</strong> deals inside the selected shift window and uses <strong>Profit only</strong>.
             </p>
           </div>
-          <div id="existing-import-status" class="existing-import-status"></div>
+          <div id="selected-shift-state" class="existing-import-status"></div>
+        </div>
+
+        <div class="shift-picker" id="shift-picker">
+          <button type="button" class="shift-pick-btn active" data-shift="ON" onclick="selectImportShift('ON')">
+            <span class="shift-code shift-on">ON</span>
+            <strong>Overnight</strong>
+            <small>00:00 → 08:00</small>
+          </button>
+          <button type="button" class="shift-pick-btn" data-shift="AM" onclick="selectImportShift('AM')">
+            <span class="shift-code shift-am">AM</span>
+            <strong>Morning / Day</strong>
+            <small>08:00 → 16:00</small>
+          </button>
+          <button type="button" class="shift-pick-btn" data-shift="PM" onclick="selectImportShift('PM')">
+            <span class="shift-code shift-pm">PM</span>
+            <strong>Evening</strong>
+            <small>16:00 → 24:00</small>
+          </button>
         </div>
 
         <div class="import-controls">
           <label class="file-control">
             <span class="file-label">1 · CLIENT SUMMARY</span>
-            <strong>One-day MT5 Trades\Summary</strong>
+            <strong>Current cumulative MT5 Trades\Summary</strong>
             <input id="summary-file" type="file" accept=".html,.htm,text/html">
-            <small>Example: from 2026.09.10 to 2026.09.10</small>
+            <small>The report date is read automatically from the file.</small>
           </label>
 
           <label class="file-control">
             <span class="file-label">2 · COVERAGE HISTORY</span>
-            <strong>Longer history is allowed</strong>
+            <strong>Longer history is allowed and recommended</strong>
             <input id="coverage-files" type="file" accept=".html,.htm,text/html" multiple>
-            <small>You can upload history from earlier days so opening comments remain available.</small>
+            <small>Older rows are used for client-comment matching. Only this shift's OUT deals are counted.</small>
           </label>
         </div>
 
         <div class="import-rule-strip">
-          <div><span>DATE</span><strong>Auto-detected from Summary</strong></div>
-          <div><span>COVER FILTER</span><strong>Position Close Time = Report Date</strong></div>
+          <div><span>CLIENT P/L</span><strong>Snapshot delta by shift</strong></div>
+          <div><span>COVER FILTER</span><strong>OUT deals in shift window</strong></div>
           <div><span>COVER P/L</span><strong>Profit only</strong></div>
-          <div><span>OLDER HISTORY</span><strong>Mapping context only</strong></div>
+          <div><span>RE-IMPORT</span><strong>Replaces shift &amp; recalculates</strong></div>
         </div>
 
         <div class="import-actions">
-          <div id="import-status" class="import-status neutral">
-            Upload a one-day Summary and one or more Coverage History files. The report date is detected automatically.
-          </div>
+          <div id="import-status" class="import-status neutral">Select a shift, then upload the Summary and Coverage History.</div>
           <div class="action-buttons">
-            <button id="analyze-import-btn" class="secondary-btn" onclick="analyzeDailyImport()">Analyze Files</button>
-            <button id="save-daily-import-btn" class="primary-btn" onclick="saveDailyImport()" disabled>Save Daily Report</button>
+            <button id="analyze-import-btn" class="secondary-btn" onclick="analyzeShiftImport()">Analyze Files</button>
+            <button id="save-shift-import-btn" class="primary-btn" onclick="saveShiftImport()" disabled>Save Shift</button>
             <button class="ghost-btn" onclick="resetImportUI(true)">Clear</button>
           </div>
         </div>
@@ -104,39 +119,16 @@
         <div id="import-preview"></div>
       </section>
 
-      <!-- MANUAL SHIFT WORKFLOW -->
-      <section class="section-block manual-section">
+      <section class="section-block">
         <div class="section-heading">
           <div>
-            <div class="eyebrow">OPERATIONAL SHIFT LOG</div>
-            <h2>Manual Top 3 — ON / AM / PM</h2>
+            <div class="eyebrow">SAVED THIS WEEK</div>
+            <h2>Shift Import Ledger</h2>
           </div>
-          <div class="section-note">Operational only · Executive Top 5 uses Daily Import</div>
+          <div class="section-note">Every ON / AM / PM import stays saved and feeds the weekly calculation</div>
         </div>
-
-        <div class="info-banner">
-          <strong>Fast entry:</strong> Login → Client P/L → Coverage P/L → next row. Press Enter to move forward and Shift+Enter to move backward.
-        </div>
-
-        <div class="table-card matrix-card">
-          <div class="table-scroll">
-            <table class="matrix-table entry-table">
-              <thead>
-                <tr>
-                  <th>DAY</th>
-                  <th>SHIFT</th>
-                  <th>TYPE</th>
-                  <th>RANK</th>
-                  <th>TRADER LOGIN</th>
-                  <th>CLIENT P/L ($)</th>
-                  <th>COVERAGE P/L ($)</th>
-                  <th>COVERAGE %</th>
-                </tr>
-              </thead>
-              <tbody id="matrix-tbody"></tbody>
-            </table>
-          </div>
-        </div>
+        <div id="shift-ledger-container"></div>
+        <div id="shift-detail-container"></div>
       </section>
     </div>
 
@@ -148,7 +140,7 @@
         <div>
           <div class="eyebrow" id="executive-week-label"></div>
           <h1>Group 5 — Executive Dashboard</h1>
-          <p class="subtitle">True weekly ranking based on imported daily Summary P/L plus matched Coverage Profit.</p>
+          <p class="subtitle">True weekly Top 5 calculated from every saved ON, AM and PM shift import.</p>
           <div id="executive-source-status" class="source-status"></div>
         </div>
         <button class="danger-btn" onclick="archiveAndResetWeek()">Archive &amp; Start New Week</button>
@@ -160,7 +152,7 @@
             <div class="eyebrow">ALL BRANCHES COMBINED</div>
             <h2>Executive Top 5</h2>
           </div>
-          <div class="section-note">Monday–Friday · all imported daily results</div>
+          <div class="section-note">Monday–Friday · ON + AM + PM</div>
         </div>
         <div id="combined-tables-container" class="dashboard-grid executive-pair"></div>
       </section>
@@ -185,7 +177,7 @@
         <div>
           <div class="eyebrow">HISTORICAL REPORTING</div>
           <h1>Weekly Archive</h1>
-          <p class="subtitle">Archived imported daily results and historical Top 5 branch performance.</p>
+          <p class="subtitle">Archived ON / AM / PM imports and historical weekly Top 5 results.</p>
         </div>
       </div>
 
