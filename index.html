@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>P/L SYSTEM — Dealer Risk Dashboard</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <aside class="sidebar">
+    <div class="brand-block">
+      <div class="brand-mark">PL</div>
+      <div>
+        <div class="brand">P/L <span>SYSTEM</span></div>
+        <div class="brand-subtitle">Dealer Risk Desk</div>
+      </div>
+    </div>
+
+    <div class="nav-section management-section">MANAGEMENT</div>
+    <button class="nav-item" onclick="switchTab('group5')"><span class="icon">▦</span> Executive Dashboard</button>
+    <button class="nav-item" onclick="switchTab('archive')"><span class="icon">◫</span> Weekly Archive</button>
+
+    <div class="nav-section">GROUP 1</div>
+    <button class="nav-item" onclick="switchTab('awada')"><span class="icon">●</span> Awada P/L</button>
+    <button class="nav-item" onclick="switchTab('fawaz')"><span class="icon">●</span> Fawaz P/L</button>
+
+    <div class="nav-section">GROUP 2</div>
+    <button class="nav-item" onclick="switchTab('boudani')"><span class="icon">●</span> Boudani P/L</button>
+    <button class="nav-item" onclick="switchTab('issa')"><span class="icon">●</span> Issa P/L</button>
+
+    <div class="nav-section">GROUP 3</div>
+    <button class="nav-item" onclick="switchTab('bbc')"><span class="icon">●</span> BBC P/L</button>
+    <button class="nav-item" onclick="switchTab('badaro')"><span class="icon">●</span> Badaro P/L</button>
+    <button class="nav-item" onclick="switchTab('tajco')"><span class="icon">●</span> Tajco P/L</button>
+
+    <div class="nav-section">GROUP 4</div>
+    <button class="nav-item" onclick="switchTab('cdi')"><span class="icon">●</span> CDI P/L</button>
+    <button class="nav-item" onclick="switchTab('connect')"><span class="icon">●</span> Connect P/L</button>
+  </aside>
+
+  <main class="main-content">
+
+    <!-- =====================================================
+         BRANCH DESK
+         ===================================================== -->
+    <div id="view-matrix" class="view-panel active">
+      <div class="header-container">
+        <div>
+          <div class="eyebrow" id="matrix-week-label"></div>
+          <h1 id="matrix-title">AWADA — Daily P/L &amp; Coverage Desk</h1>
+          <p class="subtitle">Import the one-day MT5 Summary and the longer Coverage History. The report date is detected automatically.</p>
+        </div>
+        <div class="header-chip">DAILY IMPORT = EXECUTIVE SOURCE OF TRUTH</div>
+      </div>
+
+      <!-- DAILY SOURCE OF TRUTH IMPORT -->
+      <section class="import-card">
+        <div class="import-card-header">
+          <div>
+            <div class="eyebrow">DAILY SOURCE OF TRUTH</div>
+            <h2>MT5 Summary + Coverage History</h2>
+            <p>
+              The Summary determines the report date automatically. The complete Coverage History is read for client comments,
+              but only positions closed on that detected date are counted. Coverage P/L uses Profit only.
+            </p>
+          </div>
+          <div id="existing-import-status" class="existing-import-status"></div>
+        </div>
+
+        <div class="import-controls">
+          <label class="file-control">
+            <span class="file-label">1 · CLIENT SUMMARY</span>
+            <strong>One-day MT5 Trades\Summary</strong>
+            <input id="summary-file" type="file" accept=".html,.htm,text/html">
+            <small>Example: from 2026.09.10 to 2026.09.10</small>
+          </label>
+
+          <label class="file-control">
+            <span class="file-label">2 · COVERAGE HISTORY</span>
+            <strong>Longer history is allowed</strong>
+            <input id="coverage-files" type="file" accept=".html,.htm,text/html" multiple>
+            <small>You can upload history from earlier days so opening comments remain available.</small>
+          </label>
+        </div>
+
+        <div class="import-rule-strip">
+          <div><span>DATE</span><strong>Auto-detected from Summary</strong></div>
+          <div><span>COVER FILTER</span><strong>Position Close Time = Report Date</strong></div>
+          <div><span>COVER P/L</span><strong>Profit only</strong></div>
+          <div><span>OLDER HISTORY</span><strong>Mapping context only</strong></div>
+        </div>
+
+        <div class="import-actions">
+          <div id="import-status" class="import-status neutral">
+            Upload a one-day Summary and one or more Coverage History files. The report date is detected automatically.
+          </div>
+          <div class="action-buttons">
+            <button id="analyze-import-btn" class="secondary-btn" onclick="analyzeDailyImport()">Analyze Files</button>
+            <button id="save-daily-import-btn" class="primary-btn" onclick="saveDailyImport()" disabled>Save Daily Report</button>
+            <button class="ghost-btn" onclick="resetImportUI(true)">Clear</button>
+          </div>
+        </div>
+
+        <div id="import-preview"></div>
+      </section>
+
+      <!-- MANUAL SHIFT WORKFLOW -->
+      <section class="section-block manual-section">
+        <div class="section-heading">
+          <div>
+            <div class="eyebrow">OPERATIONAL SHIFT LOG</div>
+            <h2>Manual Top 3 — ON / AM / PM</h2>
+          </div>
+          <div class="section-note">Operational only · Executive Top 5 uses Daily Import</div>
+        </div>
+
+        <div class="info-banner">
+          <strong>Fast entry:</strong> Login → Client P/L → Coverage P/L → next row. Press Enter to move forward and Shift+Enter to move backward.
+        </div>
+
+        <div class="table-card matrix-card">
+          <div class="table-scroll">
+            <table class="matrix-table entry-table">
+              <thead>
+                <tr>
+                  <th>DAY</th>
+                  <th>SHIFT</th>
+                  <th>TYPE</th>
+                  <th>RANK</th>
+                  <th>TRADER LOGIN</th>
+                  <th>CLIENT P/L ($)</th>
+                  <th>COVERAGE P/L ($)</th>
+                  <th>COVERAGE %</th>
+                </tr>
+              </thead>
+              <tbody id="matrix-tbody"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <!-- =====================================================
+         GROUP 5 — EXECUTIVE
+         ===================================================== -->
+    <div id="view-group5" class="view-panel" style="display:none;">
+      <div class="header-container">
+        <div>
+          <div class="eyebrow" id="executive-week-label"></div>
+          <h1>Group 5 — Executive Dashboard</h1>
+          <p class="subtitle">True weekly ranking based on imported daily Summary P/L plus matched Coverage Profit.</p>
+          <div id="executive-source-status" class="source-status"></div>
+        </div>
+        <button class="danger-btn" onclick="archiveAndResetWeek()">Archive &amp; Start New Week</button>
+      </div>
+
+      <section class="section-block">
+        <div class="section-heading">
+          <div>
+            <div class="eyebrow">ALL BRANCHES COMBINED</div>
+            <h2>Executive Top 5</h2>
+          </div>
+          <div class="section-note">Monday–Friday · all imported daily results</div>
+        </div>
+        <div id="combined-tables-container" class="dashboard-grid executive-pair"></div>
+      </section>
+
+      <section class="section-block">
+        <div class="section-heading">
+          <div>
+            <div class="eyebrow">BRANCH PERFORMANCE</div>
+            <h2>Top 5 by Branch</h2>
+          </div>
+          <div class="section-note">Client P/L · Cover Profit · Broker Net</div>
+        </div>
+        <div id="management-tables-container" class="dashboard-grid"></div>
+      </section>
+    </div>
+
+    <!-- =====================================================
+         ARCHIVE
+         ===================================================== -->
+    <div id="view-archive" class="view-panel" style="display:none;">
+      <div class="header-container">
+        <div>
+          <div class="eyebrow">HISTORICAL REPORTING</div>
+          <h1>Weekly Archive</h1>
+          <p class="subtitle">Archived imported daily results and historical Top 5 branch performance.</p>
+        </div>
+      </div>
+
+      <div class="archive-layout">
+        <div class="archive-sidebar">
+          <div id="archive-week-list" class="archive-week-list"></div>
+        </div>
+        <div class="archive-content">
+          <div id="archive-detail-container"></div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <div id="toast" class="toast" aria-live="polite"></div>
+
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
