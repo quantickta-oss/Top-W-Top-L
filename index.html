@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>P/L SYSTEM — Dealer Risk Dashboard</title>
+  <title>P/L SYSTEM — Weekly Dealer Risk Dashboard</title>
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -39,79 +39,60 @@
   </aside>
 
   <main class="main-content">
-
     <!-- =====================================================
-         BRANCH IMPORT DESK — IMPORT ONLY
+         BRANCH — WEEKLY IMPORT ONLY
          ===================================================== -->
-    <div id="view-matrix" class="view-panel active">
+    <div id="view-branch" class="view-panel active">
       <div class="header-container">
         <div>
-          <div class="eyebrow" id="matrix-week-label"></div>
-          <h1 id="matrix-title">AWADA — Shift Import Desk</h1>
-          <p class="subtitle">No manual P/L entry. Import the MT5 Summary + Coverage History three times per day: ON, AM and PM.</p>
+          <div class="eyebrow">FRIDAY · AFTER MARKET CLOSE</div>
+          <h1 id="branch-title">AWADA — Weekly Import</h1>
+          <p class="subtitle">One import per week. No manual P/L typing and no ON / AM / PM processing.</p>
         </div>
-        <div class="header-chip">IMPORT ONLY · ALL SHIFTS SAVED</div>
+        <div class="header-chip">WEEKLY SOURCE OF TRUTH</div>
       </div>
 
       <section class="import-card">
         <div class="import-card-header">
           <div>
-            <div class="eyebrow">SHIFT SOURCE OF TRUTH</div>
-            <h2>Import ON / AM / PM</h2>
+            <div class="eyebrow">WEEKLY MT5 IMPORT</div>
+            <h2>Client Summary + Coverage History</h2>
             <p>
-              The Summary date is detected automatically. Client P/L is calculated as the change between cumulative Summary snapshots.
-              Coverage uses only closed <strong>OUT</strong> deals inside the selected shift window and uses <strong>Profit only</strong>.
+              Upload the MT5 Trades\Summary for Monday through Friday and the coverage Trade History.
+              The week is detected automatically from the Summary. Coverage counts only <strong>OUT</strong> deals closed inside that week and uses <strong>Profit only</strong>.
             </p>
           </div>
-          <div id="selected-shift-state" class="existing-import-status"></div>
-        </div>
-
-        <div class="shift-picker" id="shift-picker">
-          <button type="button" class="shift-pick-btn active" data-shift="ON" onclick="selectImportShift('ON')">
-            <span class="shift-code shift-on">ON</span>
-            <strong>Overnight</strong>
-            <small>00:00 → 08:00</small>
-          </button>
-          <button type="button" class="shift-pick-btn" data-shift="AM" onclick="selectImportShift('AM')">
-            <span class="shift-code shift-am">AM</span>
-            <strong>Morning / Day</strong>
-            <small>08:00 → 16:00</small>
-          </button>
-          <button type="button" class="shift-pick-btn" data-shift="PM" onclick="selectImportShift('PM')">
-            <span class="shift-code shift-pm">PM</span>
-            <strong>Evening</strong>
-            <small>16:00 → 24:00</small>
-          </button>
+          <div id="existing-week-status" class="existing-import-status"></div>
         </div>
 
         <div class="import-controls">
           <label class="file-control">
-            <span class="file-label">1 · CLIENT SUMMARY</span>
-            <strong>Current cumulative MT5 Trades\Summary</strong>
+            <span class="file-label">1 · WEEKLY CLIENT SUMMARY</span>
+            <strong>MT5 Trades\Summary — Monday → Friday</strong>
             <input id="summary-file" type="file" accept=".html,.htm,text/html">
-            <small>The report date is read automatically from the file.</small>
+            <small>Required range: Monday through Friday. Login + Profit are imported for every client.</small>
           </label>
 
           <label class="file-control">
             <span class="file-label">2 · COVERAGE HISTORY</span>
-            <strong>Longer history is allowed and recommended</strong>
+            <strong>Full/longer MT5 coverage history is allowed</strong>
             <input id="coverage-files" type="file" accept=".html,.htm,text/html" multiple>
-            <small>Older rows are used for client-comment matching. Only this shift's OUT deals are counted.</small>
+            <small>Older rows are used only to recover client comments. Only closes inside the detected week are counted.</small>
           </label>
         </div>
 
         <div class="import-rule-strip">
-          <div><span>CLIENT P/L</span><strong>Snapshot delta by shift</strong></div>
-          <div><span>COVER FILTER</span><strong>OUT deals in shift window</strong></div>
+          <div><span>CLIENT P/L</span><strong>Weekly Summary Profit</strong></div>
+          <div><span>COVER FILTER</span><strong>OUT deals within week</strong></div>
           <div><span>COVER P/L</span><strong>Profit only</strong></div>
-          <div><span>RE-IMPORT</span><strong>Replaces shift &amp; recalculates</strong></div>
+          <div><span>RE-IMPORT</span><strong>Replaces same branch/week</strong></div>
         </div>
 
         <div class="import-actions">
-          <div id="import-status" class="import-status neutral">Select a shift, then upload the Summary and Coverage History.</div>
+          <div id="import-status" class="import-status neutral">Upload the weekly Summary and Coverage History.</div>
           <div class="action-buttons">
-            <button id="analyze-import-btn" class="secondary-btn" onclick="analyzeShiftImport()">Analyze Files</button>
-            <button id="save-shift-import-btn" class="primary-btn" onclick="saveShiftImport()" disabled>Save Shift</button>
+            <button id="analyze-import-btn" class="secondary-btn" onclick="analyzeWeeklyImport()">Analyze Week</button>
+            <button id="save-week-import-btn" class="primary-btn" onclick="saveWeeklyImport()" disabled>Save Week</button>
             <button class="ghost-btn" onclick="resetImportUI(true)">Clear</button>
           </div>
         </div>
@@ -122,29 +103,33 @@
       <section class="section-block">
         <div class="section-heading">
           <div>
-            <div class="eyebrow">SAVED THIS WEEK</div>
-            <h2>Shift Import Ledger</h2>
+            <div class="eyebrow">PERMANENT RECORDS</div>
+            <h2>Saved Weekly Reports</h2>
           </div>
-          <div class="section-note">Every ON / AM / PM import stays saved and feeds the weekly calculation</div>
+          <div class="section-note">Every saved week remains available — no reset required</div>
         </div>
-        <div id="shift-ledger-container"></div>
-        <div id="shift-detail-container"></div>
+        <div id="branch-week-ledger"></div>
+        <div id="branch-week-detail"></div>
       </section>
     </div>
 
     <!-- =====================================================
-         GROUP 5 — EXECUTIVE
+         GROUP 5 — EXECUTIVE DASHBOARD
          ===================================================== -->
     <div id="view-group5" class="view-panel" style="display:none;">
       <div class="header-container">
         <div>
-          <div class="eyebrow" id="executive-week-label"></div>
+          <div class="eyebrow">MANAGEMENT · ALL BRANCHES</div>
           <h1>Group 5 — Executive Dashboard</h1>
-          <p class="subtitle">True weekly Top 5 calculated from every saved ON, AM and PM shift import.</p>
-          <div id="executive-source-status" class="source-status"></div>
+          <p class="subtitle">True weekly Top 5 calculated from every client in each saved branch report.</p>
         </div>
-        <button class="danger-btn" onclick="archiveAndResetWeek()">Archive &amp; Start New Week</button>
+        <label class="week-select-control">
+          <span>TRADING WEEK</span>
+          <select id="executive-week-select" class="control" onchange="selectExecutiveWeek(this.value)"></select>
+        </label>
       </div>
+
+      <div id="executive-source-status" class="source-status"></div>
 
       <section class="section-block">
         <div class="section-heading">
@@ -152,7 +137,7 @@
             <div class="eyebrow">ALL BRANCHES COMBINED</div>
             <h2>Executive Top 5</h2>
           </div>
-          <div class="section-note">Monday–Friday · ON + AM + PM</div>
+          <div id="executive-week-note" class="section-note"></div>
         </div>
         <div id="combined-tables-container" class="dashboard-grid executive-pair"></div>
       </section>
@@ -170,14 +155,14 @@
     </div>
 
     <!-- =====================================================
-         ARCHIVE
+         WEEKLY ARCHIVE / HISTORY
          ===================================================== -->
     <div id="view-archive" class="view-panel" style="display:none;">
       <div class="header-container">
         <div>
-          <div class="eyebrow">HISTORICAL REPORTING</div>
+          <div class="eyebrow">PERMANENT HISTORY</div>
           <h1>Weekly Archive</h1>
-          <p class="subtitle">Archived ON / AM / PM imports and historical weekly Top 5 results.</p>
+          <p class="subtitle">Browse every saved weekly import. New weekly records are archived automatically by week key.</p>
         </div>
       </div>
 
