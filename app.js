@@ -1,9 +1,11 @@
 // ============================================================================
-// P/L SYSTEM — Dealer Risk Dashboard
-// Shift Import Edition: ON / AM / PM
+// P/L SYSTEM — Weekly Import Edition
+// One import per branch, every Friday after market close.
+// Client P/L: MT5 weekly Summary -> Profit column.
+// Coverage P/L: Trade History -> OUT deals inside detected week -> Profit only.
 // ============================================================================
 
-// IMPORTANT: replace YOUR_FIREBASE_API_KEY with your real live key.
+// IMPORTANT: replace YOUR_FIREBASE_API_KEY with the real key from your live site.
 const firebaseConfig = {
   apiKey: "YOUR_FIREBASE_API_KEY",
   authDomain: "pl-system-227d1.firebaseapp.com",
@@ -43,49 +45,48 @@ const allBranches = [
   'bbc', 'badaro', 'tajco', 'cdi', 'connect'
 ];
 
-const SHIFT_ORDER = ['ON', 'AM', 'PM'];
-const SHIFT_CONFIG = {
-  ON: { label: 'Overnight', start: 0, end: 8 * 3600, display: '00:00 → 08:00' },
-  AM: { label: 'AM',        start: 8 * 3600, end: 16 * 3600, display: '08:00 → 16:00' },
-  PM: { label: 'PM',        start: 16 * 3600, end: 24 * 3600, display: '16:00 → 24:00' }
-};
-
 // ============================================================================
 // STATE
 // ============================================================================
 
 let currentBranch = 'awada';
-let selectedImportShift = 'ON';
-let shiftStore = {};              // branch -> YYYY-MM-DD -> ON/AM/PM
-let coverPositionMap = {};        // persistent branch -> cover account -> position -> client login
-let archiveStore = {};
-let selectedArchiveWeek = null;
+let weeklyStore = {};
+let coverPositionMap = {};
 let pendingImport = null;
+let selectedBranchWeekKey = null;
+let selectedExecutiveWeekKey = null;
+let selectedArchiveWeekKey = null;
 let toastTimer = null;
 
 // ============================================================================
-// FIREBASE LIVE LISTENERS
+// FIREBASE LIVE DATA
 // ============================================================================
 
-db.ref('pl_shift_store').on('value', snapshot => {
-  shiftStore = snapshot.val() || {};
+db.ref('pl_weekly_store').on('value', snapshot => {
+  weeklyStore = snapshot.val() || {};
 
   const activePanel = document.querySelector('.view-panel.active');
-  if (activePanel?.id === 'view-group5') renderManagementView();
-  if (activePanel?.id === 'view-matrix') {
-    renderShiftLedger();
-    renderSelectedShiftState();
+
+  if (activePanel?.id === 'view-branch') {
+    renderBranchWeekLedger();
+    renderExistingWeekStatus();
+
+    if (selectedBranchWeekKey) {
+      renderBranchWeekDetail(selectedBranchWeekKey);
+    }
+  }
+
+  if (activePanel?.id === 'view-group5') {
+    renderManagementView();
+  }
+
+  if (activePanel?.id === 'view-archive') {
+    renderArchiveView();
   }
 });
 
 db.ref('pl_cover_position_map').on('value', snapshot => {
   coverPositionMap = snapshot.val() || {};
-});
-
-db.ref('pl_history').on('value', snapshot => {
-  archiveStore = snapshot.val() || {};
-  const archivePanel = document.getElementById('view-archive');
-  if (archivePanel?.classList.contains('active')) renderArchiveView();
 });
 
 // ============================================================================
@@ -97,8 +98,15 @@ function applySidebarLock(allowedTabs) {
 
   document.querySelectorAll('.nav-item').forEach(btn => {
     const onclickAttr = btn.getAttribute('onclick') || '';
-    const isAllowed = allowedTabs.some(tab => onclickAttr.includes(`'${tab}'`));
-    btn.style.setProperty('display', isAllowed ? 'flex' : 'none', 'important');
+    const isAllowed = allowedTabs.some(tab =>
+      onclickAttr.includes(`'${tab}'`)
+    );
+
+    btn.style.setProperty(
+      'display',
+      isAllowed ? 'flex' : 'none',
+      'important'
+    );
   });
 
   document.querySelectorAll('.nav-section').forEach(sec => {
@@ -109,30 +117,52 @@ function applySidebarLock(allowedTabs) {
 
     let visible = false;
     let next = sec.nextElementSibling;
+
     while (next && !next.classList.contains('nav-section')) {
-      if (next.classList.contains('nav-item') && next.style.display !== 'none') {
+      if (
+        next.classList.contains('nav-item') &&
+        next.style.display !== 'none'
+      ) {
         visible = true;
         break;
       }
+
       next = next.nextElementSibling;
     }
-    sec.style.setProperty('display', visible ? 'block' : 'none', 'important');
+
+    sec.style.setProperty(
+      'display',
+      visible ? 'block' : 'none',
+      'important'
+    );
   });
 }
 
 function showPanel(panelId) {
   const panel = document.getElementById(panelId);
+
   if (!panel) return;
+
   panel.classList.add('active');
   panel.style.display = 'block';
 }
 
 function switchTab(tabKey) {
   const urlParams = new URLSearchParams(window.location.search);
-  const activeParam = (urlParams.get('branch') || 'group5').toLowerCase();
-  const allowedTabs = branchGroups[activeParam] || [activeParam];
 
-  if (!allowedTabs.includes(tabKey) && activeParam !== 'group5') tabKey = activeParam;
+  const activeParam = (
+    urlParams.get('branch') || 'group5'
+  ).toLowerCase();
+
+  const allowedTabs =
+    branchGroups[activeParam] || [activeParam];
+
+  if (
+    !allowedTabs.includes(tabKey) &&
+    activeParam !== 'group5'
+  ) {
+    tabKey = activeParam;
+  }
 
   document.querySelectorAll('.view-panel').forEach(panel => {
     panel.classList.remove('active');
@@ -141,28 +171,42 @@ function switchTab(tabKey) {
 
   document.querySelectorAll('.nav-item').forEach(btn => {
     btn.classList.remove('active');
+
     const onclickAttr = btn.getAttribute('onclick') || '';
-    if (onclickAttr.includes(`'${tabKey}'`)) btn.classList.add('active');
+
+    if (onclickAttr.includes(`'${tabKey}'`)) {
+      btn.classList.add('active');
+    }
   });
 
   if (tabKey === 'group5') {
     showPanel('view-group5');
     renderManagementView();
-  } else if (tabKey === 'archive') {
+  }
+
+  else if (tabKey === 'archive') {
     showPanel('view-archive');
     renderArchiveView();
-  } else {
+  }
+
+  else {
     currentBranch = tabKey;
     pendingImport = null;
-    showPanel('view-matrix');
+    selectedBranchWeekKey = null;
 
-    const title = document.getElementById('matrix-title');
-    if (title) title.textContent = `${tabKey.toUpperCase()} — Shift Import Desk`;
+    showPanel('view-branch');
+
+    const title =
+      document.getElementById('branch-title');
+
+    if (title) {
+      title.textContent =
+        `${tabKey.toUpperCase()} — Weekly Import`;
+    }
 
     resetImportUI(false);
-    updateWeekLabels();
-    renderShiftLedger();
-    renderSelectedShiftState();
+    renderBranchWeekLedger();
+    renderExistingWeekStatus();
   }
 
   window.scrollTo(0, 0);
@@ -173,30 +217,48 @@ function switchTab(tabKey) {
 // ============================================================================
 
 function parseCurrencyNumber(value) {
-  if (value === null || value === undefined || value === '') return 0;
+  if (
+    value === null ||
+    value === undefined ||
+    value === ''
+  ) {
+    return 0;
+  }
+
   const clean = String(value)
     .replace(/\u00a0/g, ' ')
     .replace(/\s+/g, '')
     .replace(/,/g, '')
     .replace(/[^0-9.+-]/g, '');
+
   return Number.parseFloat(clean) || 0;
 }
 
 function roundMoney(value) {
-  return Math.round((Number(value) + Number.EPSILON) * 100) / 100;
+  return Math.round(
+    (Number(value || 0) + Number.EPSILON) * 100
+  ) / 100;
 }
 
 function formatCurrency(value) {
   const num = parseCurrencyNumber(value);
+
   const sign = num < 0 ? '-' : '';
-  return `${sign}$${Math.abs(num).toLocaleString('en-US', {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2
-  })}`;
+
+  return `${sign}$${Math.abs(num).toLocaleString(
+    'en-US',
+    {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2
+    }
+  )}`;
 }
 
 function brokerNet(client, coverage) {
-  return roundMoney(parseCurrencyNumber(coverage) - parseCurrencyNumber(client));
+  return roundMoney(
+    parseCurrencyNumber(coverage) -
+    parseCurrencyNumber(client)
+  );
 }
 
 function escapeHTML(value) {
@@ -209,1286 +271,4304 @@ function escapeHTML(value) {
 }
 
 function normalizeWhitespace(value) {
-  return String(value ?? '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim();
+  return String(value ?? '')
+    .replace(/\u00a0/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 function exactClientLogin(value) {
-  const clean = normalizeWhitespace(value);
-  return /^\d{3,12}$/.test(clean) ? clean : '';
+  const clean =
+    normalizeWhitespace(value);
+
+  return /^\d{3,12}$/.test(clean)
+    ? clean
+    : '';
 }
 
 function firebaseSafeKey(value) {
-  return String(value ?? '').replace(/[.#$\[\]\/]/g, '_');
+  return String(value ?? '')
+    .replace(/[.#$\[\]\/]/g, '_');
 }
 
 function dotDateToISO(dotDate) {
-  return String(dotDate).replace(/\./g, '-');
+  return String(dotDate || '')
+    .replace(/\./g, '-');
+}
+
+function isoToDotDate(isoDate) {
+  return String(isoDate || '')
+    .replace(/-/g, '.');
 }
 
 function simpleHash(text) {
   let hash = 2166136261;
+
   for (let i = 0; i < text.length; i += 1) {
     hash ^= text.charCodeAt(i);
     hash = Math.imul(hash, 16777619);
   }
+
   return (hash >>> 0).toString(36);
 }
 
 function deepClone(value) {
-  return JSON.parse(JSON.stringify(value || {}));
+  return JSON.parse(
+    JSON.stringify(value || {})
+  );
 }
 
-function showToast(message, type = 'normal') {
-  const toast = document.getElementById('toast');
+function showToast(
+  message,
+  type = 'normal'
+) {
+  const toast =
+    document.getElementById('toast');
+
   if (!toast) return;
 
   clearTimeout(toastTimer);
+
   toast.textContent = message;
-  toast.classList.toggle('error', type === 'error');
+
+  toast.classList.toggle(
+    'error',
+    type === 'error'
+  );
+
   toast.classList.add('show');
-  toastTimer = setTimeout(() => toast.classList.remove('show'), 3200);
+
+  toastTimer = setTimeout(
+    () => toast.classList.remove('show'),
+    3600
+  );
+}
+
+function setImportStatus(
+  message,
+  type = 'neutral'
+) {
+  const el =
+    document.getElementById('import-status');
+
+  if (!el) return;
+
+  el.textContent = message;
+  el.className = `import-status ${type}`;
 }
 
 // ============================================================================
 // DATE / WEEK UTILITIES
 // ============================================================================
 
-function getWeekBounds(date = new Date()) {
-  const d = new Date(date);
-  d.setHours(12, 0, 0, 0);
-  const weekday = d.getDay();
-  const diffToMonday = weekday === 0 ? -6 : 1 - weekday;
+function isoToDate(isoDate) {
+  const [y, m, d] =
+    String(isoDate)
+      .split('-')
+      .map(Number);
 
-  const monday = new Date(d);
-  monday.setDate(d.getDate() + diffToMonday);
-
-  const friday = new Date(monday);
-  friday.setDate(monday.getDate() + 4);
-
-  return { monday, friday };
+  return new Date(
+    y,
+    m - 1,
+    d,
+    12,
+    0,
+    0,
+    0
+  );
 }
 
-function isoDateOnly(date) {
-  const y = date.getFullYear();
-  const m = String(date.getMonth() + 1).padStart(2, '0');
-  const d = String(date.getDate()).padStart(2, '0');
-  return `${y}-${m}-${d}`;
+function daysBetween(
+  startISO,
+  endISO
+) {
+  return Math.round(
+    (
+      isoToDate(endISO) -
+      isoToDate(startISO)
+    ) / 86400000
+  );
 }
 
-function getWeekDateKeys(date = new Date()) {
-  const { monday } = getWeekBounds(date);
-  return Array.from({ length: 5 }, (_, index) => {
-    const d = new Date(monday);
-    d.setDate(monday.getDate() + index);
-    return isoDateOnly(d);
-  });
+function formatISODate(
+  isoDate,
+  withWeekday = true
+) {
+  if (
+    !/^\d{4}-\d{2}-\d{2}$/.test(
+      String(isoDate)
+    )
+  ) {
+    return String(isoDate || '');
+  }
+
+  return isoToDate(
+    isoDate
+  ).toLocaleDateString(
+    'en-US',
+    {
+      ...(withWeekday
+        ? { weekday: 'short' }
+        : {}),
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric'
+    }
+  );
 }
 
-function getWeekLabel(date = new Date()) {
-  const { monday, friday } = getWeekBounds(date);
-  return `${monday.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} – ${friday.toLocaleDateString('en-US', {
-    month: 'short', day: 'numeric', year: 'numeric'
-  })}`;
+function formatWeekLabel(
+  startISO,
+  endISO
+) {
+  const start =
+    isoToDate(startISO);
+
+  const end =
+    isoToDate(endISO);
+
+  const sameYear =
+    start.getFullYear() ===
+    end.getFullYear();
+
+  const startText =
+    start.toLocaleDateString(
+      'en-US',
+      {
+        month: 'short',
+        day: 'numeric',
+        ...(sameYear
+          ? {}
+          : { year: 'numeric' })
+      }
+    );
+
+  const endText =
+    end.toLocaleDateString(
+      'en-US',
+      {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric'
+      }
+    );
+
+  return `${startText} – ${endText}`;
 }
 
-function formatISODate(isoDate) {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(isoDate))) return String(isoDate || '');
-  const [year, month, day] = isoDate.split('-').map(Number);
-  return new Date(year, month - 1, day, 12, 0, 0).toLocaleDateString('en-US', {
-    weekday: 'short', month: 'short', day: 'numeric', year: 'numeric'
-  });
+function makeWeekKey(
+  startISO,
+  endISO
+) {
+  return `${startISO}_${endISO}`;
 }
 
-function updateWeekLabels() {
-  const label = `Trading Week · ${getWeekLabel()}`;
-  const matrix = document.getElementById('matrix-week-label');
-  const executive = document.getElementById('executive-week-label');
-  if (matrix) matrix.textContent = label;
-  if (executive) executive.textContent = label;
+function validateTradingWeek(
+  startISO,
+  endISO
+) {
+  const start =
+    isoToDate(startISO);
+
+  const end =
+    isoToDate(endISO);
+
+  const diff =
+    daysBetween(
+      startISO,
+      endISO
+    );
+
+  if (end < start) {
+    throw new Error(
+      'The Summary end date is before the start date.'
+    );
+  }
+
+  if (
+    start.getDay() !== 1 ||
+    end.getDay() !== 5 ||
+    diff !== 4
+  ) {
+    throw new Error(
+      `Weekly Summary must be exported Monday → Friday. Detected ${startISO} → ${endISO}.`
+    );
+  }
 }
 
-function parseMT5Timestamp(value) {
-  const match = String(value || '').match(/^(\d{4}\.\d{2}\.\d{2})\s+(\d{2}):(\d{2}):(\d{2})$/);
-  if (!match) return null;
-  return {
-    dateDot: match[1],
-    seconds: Number(match[2]) * 3600 + Number(match[3]) * 60 + Number(match[4])
-  };
+function timestampInWeek(
+  value,
+  startDot,
+  endDot
+) {
+  const match =
+    String(value || '').match(
+      /^(\d{4}\.\d{2}\.\d{2})\s+\d{2}:\d{2}:\d{2}$/
+    );
+
+  if (!match) return false;
+
+  const dateDot = match[1];
+
+  return (
+    dateDot >= startDot &&
+    dateDot <= endDot
+  );
 }
 
-function timestampInShift(value, reportDateDot, shift) {
-  const parsed = parseMT5Timestamp(value);
-  const cfg = SHIFT_CONFIG[shift];
-  if (!parsed || !cfg) return false;
-  return parsed.dateDot === reportDateDot && parsed.seconds >= cfg.start && parsed.seconds < cfg.end;
+function formatSavedAt(value) {
+  if (!value) return '—';
+
+  const d = new Date(value);
+
+  if (Number.isNaN(d.getTime())) {
+    return String(value);
+  }
+
+  return `${
+    d.toLocaleDateString(
+      'en-US',
+      {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric'
+      }
+    )
+  } · ${
+    d.toLocaleTimeString(
+      'en-US',
+      {
+        hour: '2-digit',
+        minute: '2-digit'
+      }
+    )
+  }`;
 }
 
 // ============================================================================
-// MT5 FILE READING — UTF-16 SAFE
+// FILE READING — MT5 UTF-16 SAFE
 // ============================================================================
 
 async function readMT5File(file) {
-  const buffer = await file.arrayBuffer();
-  const bytes = new Uint8Array(buffer);
+  const buffer =
+    await file.arrayBuffer();
+
+  const bytes =
+    new Uint8Array(buffer);
 
   let encoding = 'utf-8';
   let offset = 0;
 
-  if (bytes.length >= 2 && bytes[0] === 0xff && bytes[1] === 0xfe) {
+  if (
+    bytes.length >= 2 &&
+    bytes[0] === 0xff &&
+    bytes[1] === 0xfe
+  ) {
     encoding = 'utf-16le';
     offset = 2;
-  } else if (bytes.length >= 2 && bytes[0] === 0xfe && bytes[1] === 0xff) {
+  }
+
+  else if (
+    bytes.length >= 2 &&
+    bytes[0] === 0xfe &&
+    bytes[1] === 0xff
+  ) {
     encoding = 'utf-16be';
     offset = 2;
-  } else if (bytes.length >= 4 && bytes[1] === 0x00 && bytes[3] === 0x00) {
+  }
+
+  else if (
+    bytes.length >= 4 &&
+    bytes[1] === 0x00 &&
+    bytes[3] === 0x00
+  ) {
     encoding = 'utf-16le';
   }
 
   try {
-    return new TextDecoder(encoding).decode(bytes.subarray(offset));
-  } catch (err) {
-    console.warn(`TextDecoder(${encoding}) failed; falling back to utf-8`, err);
-    return new TextDecoder('utf-8').decode(bytes);
+    return new TextDecoder(
+      encoding
+    ).decode(
+      bytes.subarray(offset)
+    );
+  }
+
+  catch (err) {
+    console.warn(
+      `TextDecoder(${encoding}) failed; falling back to utf-8`,
+      err
+    );
+
+    return new TextDecoder(
+      'utf-8'
+    ).decode(bytes);
   }
 }
 
 function directCells(row) {
-  return Array.from(row.children)
-    .filter(el => el.tagName === 'TD' || el.tagName === 'TH')
-    .map(el => normalizeWhitespace(el.textContent));
+  return Array.from(
+    row.children
+  )
+    .filter(
+      el =>
+        el.tagName === 'TD' ||
+        el.tagName === 'TH'
+    )
+    .map(
+      el =>
+        normalizeWhitespace(
+          el.textContent
+        )
+    );
 }
 
 // ============================================================================
-// SUMMARY PARSER
+// WEEKLY SUMMARY PARSER
 // ============================================================================
 
-function parseSummaryHTML(html) {
-  const doc = new DOMParser().parseFromString(html, 'text/html');
-  const bodyText = normalizeWhitespace(doc.body?.textContent || '');
+function parseWeeklySummaryHTML(html) {
+  const doc =
+    new DOMParser()
+      .parseFromString(
+        html,
+        'text/html'
+      );
 
-  const dateMatch = bodyText.match(/from\s+'(\d{4}\.\d{2}\.\d{2})'\s+to\s+'(\d{4}\.\d{2}\.\d{2})'/i);
-  if (!dateMatch) throw new Error('Could not detect the report date from the Summary file.');
+  const bodyText =
+    normalizeWhitespace(
+      doc.body?.textContent || ''
+    );
 
-  const fromDate = dateMatch[1];
-  const toDate = dateMatch[2];
-  if (fromDate !== toDate) {
-    throw new Error(`Summary must cover one day only. This file covers ${fromDate} to ${toDate}.`);
+  const dateMatch =
+    bodyText.match(
+      /from\s+'(\d{4}\.\d{2}\.\d{2})'\s+to\s+'(\d{4}\.\d{2}\.\d{2})'/i
+    );
+
+  if (!dateMatch) {
+    throw new Error(
+      'Could not detect the date range from the Summary file.'
+    );
+  }
+
+  const weekStartDot =
+    dateMatch[1];
+
+  const weekEndDot =
+    dateMatch[2];
+
+  const weekStart =
+    dotDateToISO(
+      weekStartDot
+    );
+
+  const weekEnd =
+    dotDateToISO(
+      weekEndDot
+    );
+
+  validateTradingWeek(
+    weekStart,
+    weekEnd
+  );
+
+  let headerIndexes = null;
+
+  const rows =
+    Array.from(
+      doc.querySelectorAll('tr')
+    );
+
+  for (const row of rows) {
+    const cells =
+      directCells(row);
+
+    const normalized =
+      cells.map(
+        v => v.toLowerCase()
+      );
+
+    const loginIndex =
+      normalized.indexOf(
+        'login'
+      );
+
+    const profitIndex =
+      normalized.indexOf(
+        'profit'
+      );
+
+    if (
+      loginIndex !== -1 &&
+      profitIndex !== -1
+    ) {
+      headerIndexes = {
+        login: loginIndex,
+        name:
+          normalized.indexOf(
+            'name'
+          ),
+        group:
+          normalized.indexOf(
+            'group'
+          ),
+        profit:
+          profitIndex
+      };
+
+      break;
+    }
+  }
+
+  if (!headerIndexes) {
+    throw new Error(
+      'Could not locate Login and Profit columns in the Summary file.'
+    );
   }
 
   const byLogin = {};
   let rawRows = 0;
 
-  doc.querySelectorAll('tr').forEach(row => {
-    const cells = directCells(row);
-    if (cells.length < 13) return;
+  rows.forEach(row => {
+    const cells =
+      directCells(row);
 
-    const login = exactClientLogin(cells[0]);
+    if (
+      cells.length <=
+      headerIndexes.profit
+    ) {
+      return;
+    }
+
+    const login =
+      exactClientLogin(
+        cells[
+          headerIndexes.login
+        ]
+      );
+
     if (!login) return;
 
-    const name = cells[1] || '';
-    const group = cells[2] || '';
-    const profit = parseCurrencyNumber(cells[12]);
+    const name =
+      headerIndexes.name >= 0
+        ? (
+          cells[
+            headerIndexes.name
+          ] || ''
+        )
+        : '';
+
+    const group =
+      headerIndexes.group >= 0
+        ? (
+          cells[
+            headerIndexes.group
+          ] || ''
+        )
+        : '';
+
+    const profit =
+      parseCurrencyNumber(
+        cells[
+          headerIndexes.profit
+        ]
+      );
 
     rawRows += 1;
-    if (!byLogin[login]) byLogin[login] = { login, name, group, cumulativeClient: 0 };
-    byLogin[login].cumulativeClient += profit;
-    if (!byLogin[login].name && name) byLogin[login].name = name;
-    if (!byLogin[login].group && group) byLogin[login].group = group;
+
+    if (!byLogin[login]) {
+      byLogin[login] = {
+        login,
+        name,
+        group,
+        client: 0
+      };
+    }
+
+    byLogin[login].client =
+      roundMoney(
+        byLogin[login].client +
+        profit
+      );
+
+    if (
+      !byLogin[login].name &&
+      name
+    ) {
+      byLogin[login].name =
+        name;
+    }
+
+    if (
+      !byLogin[login].group &&
+      group
+    ) {
+      byLogin[login].group =
+        group;
+    }
   });
 
-  const rows = Object.values(byLogin).map(row => ({
-    ...row,
-    cumulativeClient: roundMoney(row.cumulativeClient)
-  }));
+  const clientRows =
+    Object.values(
+      byLogin
+    );
 
-  if (!rows.length) throw new Error('No client rows were found in the Summary file.');
+  if (!clientRows.length) {
+    throw new Error(
+      'No client rows were found in the Summary file.'
+    );
+  }
 
   return {
-    reportDateDot: fromDate,
-    reportDate: dotDateToISO(fromDate),
+    weekStartDot,
+    weekEndDot,
+    weekStart,
+    weekEnd,
+    weekKey:
+      makeWeekKey(
+        weekStart,
+        weekEnd
+      ),
+    weekLabel:
+      formatWeekLabel(
+        weekStart,
+        weekEnd
+      ),
     rawRows,
-    rows
+    clientRows
   };
-}
-
-function snapshotObjectFromSummary(summary) {
-  const snapshot = {};
-  summary.rows.forEach(row => {
-    snapshot[row.login] = {
-      login: row.login,
-      name: row.name || '',
-      group: row.group || '',
-      cumulativeClient: roundMoney(row.cumulativeClient)
-    };
-  });
-  return snapshot;
 }
 
 // ============================================================================
 // COVERAGE HISTORY PARSER
 // ============================================================================
 
-function parseCoverageHistoryHTML(html, fileName = '') {
-  const doc = new DOMParser().parseFromString(html, 'text/html');
-  const bodyText = normalizeWhitespace(doc.body?.textContent || '');
+function parseCoverageHistoryHTML(
+  html,
+  fileName = ''
+) {
+  const doc =
+    new DOMParser()
+      .parseFromString(
+        html,
+        'text/html'
+      );
 
-  const accountMatch = bodyText.match(/Account:\s*(\d+)/i);
-  const accountId = accountMatch ? accountMatch[1] : `file_${simpleHash(fileName || bodyText.slice(0, 200))}`;
+  const bodyText =
+    normalizeWhitespace(
+      doc.body?.textContent || ''
+    );
+
+  const accountMatch =
+    bodyText.match(
+      /Account:\s*(\d+)/i
+    );
+
+  const accountId =
+    accountMatch
+      ? accountMatch[1]
+      : `file_${simpleHash(
+          fileName ||
+          bodyText.slice(0, 300)
+        )}`;
 
   let section = '';
+
   const positions = [];
   const orders = {};
   const deals = [];
 
-  doc.querySelectorAll('tr').forEach(row => {
-    const cells = directCells(row);
-    if (!cells.length) return;
-    const rowText = normalizeWhitespace(cells.join(' '));
+  doc.querySelectorAll('tr')
+    .forEach(row => {
+      const cells =
+        directCells(row);
 
-    if (rowText === 'Positions') { section = 'positions'; return; }
-    if (rowText === 'Orders') { section = 'orders'; return; }
-    if (rowText === 'Deals') { section = 'deals'; return; }
+      if (!cells.length) return;
 
-    if (section === 'positions') {
-      if (cells.length < 14) return;
-      if (!/^\d{4}\.\d{2}\.\d{2}\s+\d{2}:\d{2}:\d{2}$/.test(cells[0])) return;
-      if (!/^\d+$/.test(cells[1])) return;
+      const rowText =
+        normalizeWhitespace(
+          cells.join(' ')
+        );
 
-      positions.push({
-        accountId,
-        positionId: cells[1],
-        openTime: cells[0],
-        symbol: cells[2] || '',
-        type: (cells[3] || '').toLowerCase(),
-        directComment: exactClientLogin(cells[4]),
-        volume: parseCurrencyNumber(cells[5]),
-        openPrice: parseCurrencyNumber(cells[6]),
-        closeTime: cells[9] || '',
-        closePrice: parseCurrencyNumber(cells[10]),
-        profit: parseCurrencyNumber(cells[13])
-      });
-      return;
-    }
+      if (rowText === 'Positions') {
+        section = 'positions';
+        return;
+      }
 
-    if (section === 'orders') {
-      if (cells.length < 2) return;
-      if (!/^\d{4}\.\d{2}\.\d{2}\s+\d{2}:\d{2}:\d{2}$/.test(cells[0])) return;
-      if (!/^\d+$/.test(cells[1])) return;
+      if (rowText === 'Orders') {
+        section = 'orders';
+        return;
+      }
 
-      orders[cells[1]] = {
-        orderId: cells[1],
-        time: cells[0],
-        symbol: cells[2] || '',
-        type: (cells[3] || '').toLowerCase(),
-        volumeText: cells[4] || '',
-        comment: exactClientLogin(cells[cells.length - 1])
-      };
-      return;
-    }
+      if (rowText === 'Deals') {
+        section = 'deals';
+        return;
+      }
 
-    if (section === 'deals') {
-      if (cells.length < 15) return;
-      if (!/^\d{4}\.\d{2}\.\d{2}\s+\d{2}:\d{2}:\d{2}$/.test(cells[0])) return;
-      if (!/^\d+$/.test(cells[1])) return;
+      if (
+        section === 'positions'
+      ) {
+        if (cells.length < 14) {
+          return;
+        }
 
-      deals.push({
-        accountId,
-        dealId: cells[1],
-        time: cells[0],
-        symbol: cells[2] || '',
-        type: (cells[3] || '').toLowerCase(),
-        direction: (cells[4] || '').toLowerCase(),
-        volume: parseCurrencyNumber(cells[5]),
-        price: parseCurrencyNumber(cells[6]),
-        orderId: cells[7] || '',
-        profit: parseCurrencyNumber(cells[12]),
-        comment: exactClientLogin(cells[14])
-      });
-    }
-  });
+        if (
+          !/^\d{4}\.\d{2}\.\d{2}\s+\d{2}:\d{2}:\d{2}$/
+            .test(cells[0])
+        ) {
+          return;
+        }
 
-  if (!deals.length) throw new Error(`No Deals section was found in ${fileName || 'the Coverage History file'}.`);
+        if (
+          !/^\d+$/.test(
+            cells[1]
+          )
+        ) {
+          return;
+        }
 
-  return { accountId, fileName, positions, orders, deals };
+        positions.push({
+          accountId,
+          positionId: cells[1],
+          openTime: cells[0],
+          symbol: cells[2] || '',
+          type:
+            (
+              cells[3] || ''
+            ).toLowerCase(),
+
+          directComment:
+            exactClientLogin(
+              cells[4]
+            ),
+
+          volume:
+            parseCurrencyNumber(
+              cells[5]
+            ),
+
+          openPrice:
+            parseCurrencyNumber(
+              cells[6]
+            ),
+
+          closeTime:
+            cells[9] || '',
+
+          closePrice:
+            parseCurrencyNumber(
+              cells[10]
+            ),
+
+          profit:
+            parseCurrencyNumber(
+              cells[13]
+            )
+        });
+
+        return;
+      }
+
+      if (
+        section === 'orders'
+      ) {
+        if (
+          cells.length < 2
+        ) {
+          return;
+        }
+
+        if (
+          !/^\d{4}\.\d{2}\.\d{2}\s+\d{2}:\d{2}:\d{2}$/
+            .test(cells[0])
+        ) {
+          return;
+        }
+
+        if (
+          !/^\d+$/.test(
+            cells[1]
+          )
+        ) {
+          return;
+        }
+
+        orders[cells[1]] = {
+          orderId:
+            cells[1],
+
+          time:
+            cells[0],
+
+          symbol:
+            cells[2] || '',
+
+          type:
+            (
+              cells[3] || ''
+            ).toLowerCase(),
+
+          volumeText:
+            cells[4] || '',
+
+          comment:
+            exactClientLogin(
+              cells[
+                cells.length - 1
+              ]
+            )
+        };
+
+        return;
+      }
+
+      if (
+        section === 'deals'
+      ) {
+        if (
+          cells.length < 15
+        ) {
+          return;
+        }
+
+        if (
+          !/^\d{4}\.\d{2}\.\d{2}\s+\d{2}:\d{2}:\d{2}$/
+            .test(cells[0])
+        ) {
+          return;
+        }
+
+        if (
+          !/^\d+$/.test(
+            cells[1]
+          )
+        ) {
+          return;
+        }
+
+        deals.push({
+          accountId,
+          sourceFile: fileName,
+          dealId:
+            cells[1],
+
+          time:
+            cells[0],
+
+          symbol:
+            cells[2] || '',
+
+          type:
+            (
+              cells[3] || ''
+            ).toLowerCase(),
+
+          direction:
+            (
+              cells[4] || ''
+            ).toLowerCase(),
+
+          volume:
+            parseCurrencyNumber(
+              cells[5]
+            ),
+
+          price:
+            parseCurrencyNumber(
+              cells[6]
+            ),
+
+          orderId:
+            cells[7] || '',
+
+          profit:
+            parseCurrencyNumber(
+              cells[12]
+            ),
+
+          comment:
+            exactClientLogin(
+              cells[14]
+            )
+        });
+      }
+    });
+
+  if (!deals.length) {
+    throw new Error(
+      `No Deals section was found in ${
+        fileName ||
+        'the Coverage History file'
+      }.`
+    );
+  }
+
+  return {
+    accountId,
+    fileName,
+    positions,
+    orders,
+    deals
+  };
 }
 
-function positionLogin(position, report, persistentAccountMap) {
-  return position.directComment ||
-    report.orders[position.positionId]?.comment ||
-    persistentAccountMap?.[firebaseSafeKey(position.positionId)] || '';
+function positionLogin(
+  position,
+  report,
+  workingAccountMap
+) {
+  return (
+    position.directComment ||
+    report.orders[
+      position.positionId
+    ]?.comment ||
+    workingAccountMap?.[
+      firebaseSafeKey(
+        position.positionId
+      )
+    ] ||
+    ''
+  );
 }
 
-function oppositePositionType(dealType) {
-  if (dealType === 'buy') return 'sell';
-  if (dealType === 'sell') return 'buy';
+function oppositePositionType(
+  dealType
+) {
+  if (dealType === 'buy') {
+    return 'sell';
+  }
+
+  if (dealType === 'sell') {
+    return 'buy';
+  }
+
   return '';
 }
 
-function resolveDealLogin(deal, report, persistentAccountMap) {
-  // Best case: comment is directly on the closing deal.
-  if (deal.comment) return { login: deal.comment, method: 'deal-comment' };
+function resolveDealLogin(
+  deal,
+  report,
+  workingAccountMap
+) {
+  if (deal.comment) {
+    return {
+      login: deal.comment,
+      method: 'deal-comment'
+    };
+  }
 
-  // Next: closing order carries the client comment.
-  const orderComment = report.orders[deal.orderId]?.comment || '';
-  if (orderComment) return { login: orderComment, method: 'order-comment' };
+  const orderComment =
+    report.orders[
+      deal.orderId
+    ]?.comment || '';
 
-  // Final-close fallback: match the OUT deal to the Positions row that closes
-  // at the exact same MT5 server time and symbol, then use the position mapping.
-  let candidates = report.positions.filter(position =>
-    position.closeTime === deal.time && position.symbol === deal.symbol
-  );
+  if (orderComment) {
+    return {
+      login: orderComment,
+      method: 'order-comment'
+    };
+  }
 
-  if (candidates.length > 1) {
-    const expectedType = oppositePositionType(deal.type);
-    const byTypeVolume = candidates.filter(position =>
-      position.type === expectedType && Math.abs(position.volume - deal.volume) < 0.0000001
+  let candidates =
+    report.positions.filter(
+      position =>
+        position.closeTime ===
+          deal.time &&
+        position.symbol ===
+          deal.symbol
     );
-    if (byTypeVolume.length) candidates = byTypeVolume;
+
+  if (
+    candidates.length > 1
+  ) {
+    const expectedType =
+      oppositePositionType(
+        deal.type
+      );
+
+    const byTypeVolume =
+      candidates.filter(
+        position =>
+          position.type ===
+            expectedType &&
+          Math.abs(
+            position.volume -
+            deal.volume
+          ) < 0.0000001
+      );
+
+    if (
+      byTypeVolume.length
+    ) {
+      candidates =
+        byTypeVolume;
+    }
   }
 
-  if (candidates.length > 1) {
-    const byPrice = candidates.filter(position => Math.abs(position.closePrice - deal.price) < 0.000001);
-    if (byPrice.length) candidates = byPrice;
+  if (
+    candidates.length > 1
+  ) {
+    const byPrice =
+      candidates.filter(
+        position =>
+          Math.abs(
+            position.closePrice -
+            deal.price
+          ) < 0.000001
+      );
+
+    if (byPrice.length) {
+      candidates =
+        byPrice;
+    }
   }
 
-  if (candidates.length === 1) {
-    const login = positionLogin(candidates[0], report, persistentAccountMap);
-    if (login) return { login, method: 'position-close-match', positionId: candidates[0].positionId };
+  if (
+    candidates.length === 1
+  ) {
+    const login =
+      positionLogin(
+        candidates[0],
+        report,
+        workingAccountMap
+      );
+
+    if (login) {
+      return {
+        login,
+        method:
+          'position-close-match',
+
+        positionId:
+          candidates[0]
+            .positionId
+      };
+    }
   }
 
-  return { login: '', method: 'unmatched' };
+  return {
+    login: '',
+    method: 'unmatched',
+    positionId: ''
+  };
 }
 
 // ============================================================================
-// SHIFT SELECTION
+// WEEKLY IMPORT ANALYSIS
 // ============================================================================
 
-function selectImportShift(shift) {
-  if (!SHIFT_CONFIG[shift]) return;
-  selectedImportShift = shift;
-  pendingImport = null;
+function buildWeeklyAccounts(
+  clientRows,
+  coverageByLogin
+) {
+  const result = {};
 
-  document.querySelectorAll('.shift-pick-btn').forEach(btn => {
-    btn.classList.toggle('active', btn.dataset.shift === shift);
+  clientRows.forEach(row => {
+    result[row.login] = {
+      login: row.login,
+      name: row.name || '',
+      group: row.group || '',
+      client:
+        roundMoney(
+          row.client
+        ),
+      coverage: 0,
+      brokerNet: 0
+    };
   });
 
-  const preview = document.getElementById('import-preview');
-  if (preview) preview.innerHTML = '';
-  const save = document.getElementById('save-shift-import-btn');
-  if (save) save.disabled = true;
+  Object.entries(
+    coverageByLogin || {}
+  ).forEach(
+    ([login, coverage]) => {
+      if (!result[login]) {
+        result[login] = {
+          login,
+          name: '',
+          group: '',
+          client: 0,
+          coverage: 0,
+          brokerNet: 0
+        };
+      }
 
-  setImportStatus(`Selected ${shift} (${SHIFT_CONFIG[shift].display}). Upload the Summary and Coverage History.`, 'neutral');
-  renderSelectedShiftState();
-}
+      result[login].coverage =
+        roundMoney(
+          coverage
+        );
+    }
+  );
 
-function renderSelectedShiftState() {
-  const container = document.getElementById('selected-shift-state');
-  if (!container) return;
+  Object.values(
+    result
+  ).forEach(row => {
+    row.coverage =
+      roundMoney(
+        row.coverage || 0
+      );
 
-  const weekDates = getWeekDateKeys();
-  const branchData = shiftStore[currentBranch] || {};
-  const savedCount = weekDates.reduce((sum, date) => {
-    return sum + SHIFT_ORDER.filter(shift => branchData?.[date]?.[shift]).length;
-  }, 0);
-
-  container.innerHTML = `
-    <span class="status-dot ${savedCount ? 'good' : 'neutral'}"></span>
-    ${escapeHTML(currentBranch.toUpperCase())} · ${savedCount}/15 shifts saved this week · selected ${escapeHTML(selectedImportShift)}
-  `;
-}
-
-// ============================================================================
-// CLIENT SNAPSHOT DELTA ENGINE
-// ============================================================================
-
-function previousShiftName(shift) {
-  if (shift === 'AM') return 'ON';
-  if (shift === 'PM') return 'AM';
-  return null;
-}
-
-function validateShiftSequence(reportDate, shift) {
-  const previous = previousShiftName(shift);
-  if (!previous) return;
-
-  const previousRecord = shiftStore?.[currentBranch]?.[reportDate]?.[previous];
-  if (!previousRecord?.snapshotAccounts) {
-    throw new Error(`${shift} requires the ${previous} Summary snapshot for ${reportDate} first. Import ${previous} before ${shift}.`);
-  }
-}
-
-function deriveShiftAccounts(snapshotAccounts, baselineSnapshot, coverageByLogin) {
-  const result = {};
-  const logins = new Set([
-    ...Object.keys(snapshotAccounts || {}),
-    ...Object.keys(baselineSnapshot || {}),
-    ...Object.keys(coverageByLogin || {})
-  ]);
-
-  logins.forEach(login => {
-    const current = snapshotAccounts?.[login];
-    const previous = baselineSnapshot?.[login];
-
-    // If a login existed in the prior cumulative snapshot but is unexpectedly
-    // absent in the newer cumulative snapshot, keep the prior cumulative value.
-    // A cumulative day report should not erase earlier activity.
-    const currentCum = current
-      ? parseCurrencyNumber(current.cumulativeClient)
-      : parseCurrencyNumber(previous?.cumulativeClient);
-    const previousCum = parseCurrencyNumber(previous?.cumulativeClient);
-
-    const client = roundMoney(currentCum - previousCum);
-    const coverage = roundMoney(coverageByLogin?.[login] || 0);
-
-    if (client === 0 && coverage === 0) return;
-
-    result[login] = {
-      login,
-      name: current?.name || previous?.name || '',
-      group: current?.group || previous?.group || '',
-      client,
-      coverage,
-      brokerNet: brokerNet(client, coverage)
-    };
+    row.brokerNet =
+      brokerNet(
+        row.client,
+        row.coverage
+      );
   });
 
   return result;
 }
 
-function recalculateDayRecords(dayRecords) {
-  const recalculated = deepClone(dayRecords);
-  let baselineSnapshot = {};
+function rankEntries(
+  entries,
+  limit = 5
+) {
+  const clean =
+    (entries || [])
+      .filter(
+        row =>
+          row &&
+          row.login
+      );
 
-  SHIFT_ORDER.forEach((shift, index) => {
-    const record = recalculated[shift];
-    if (!record) return;
+  const winners =
+    clean
+      .filter(
+        row =>
+          row.client > 0
+      )
+      .sort(
+        (a, b) =>
+          b.client -
+            a.client ||
+          String(a.login)
+            .localeCompare(
+              String(b.login)
+            )
+      )
+      .slice(
+        0,
+        limit
+      );
 
-    if (index > 0) {
-      const previousShift = SHIFT_ORDER[index - 1];
-      const previousRecord = recalculated[previousShift];
-      if (!previousRecord?.snapshotAccounts) {
-        record.baselineMissing = true;
-        record.accounts = {};
-        return;
-      }
-      baselineSnapshot = previousRecord.snapshotAccounts;
-    } else {
-      baselineSnapshot = {};
-    }
+  const losers =
+    clean
+      .filter(
+        row =>
+          row.client < 0
+      )
+      .sort(
+        (a, b) =>
+          a.client -
+            b.client ||
+          String(a.login)
+            .localeCompare(
+              String(b.login)
+            )
+      )
+      .slice(
+        0,
+        limit
+      );
 
-    record.baselineMissing = false;
-    record.accounts = deriveShiftAccounts(
-      record.snapshotAccounts || {},
-      baselineSnapshot,
-      record.coverageByLogin || {}
-    );
-
-    const accounts = Object.values(record.accounts);
-    record.stats = {
-      ...(record.stats || {}),
-      storedAccounts: accounts.length,
-      clientShiftTotal: roundMoney(accounts.reduce((sum, row) => sum + row.client, 0)),
-      coverShiftTotal: roundMoney(accounts.reduce((sum, row) => sum + row.coverage, 0)),
-      brokerShiftNet: roundMoney(accounts.reduce((sum, row) => sum + row.brokerNet, 0))
-    };
-  });
-
-  return recalculated;
+  return {
+    winners,
+    losers
+  };
 }
 
-// ============================================================================
-// SHIFT IMPORT ANALYSIS
-// ============================================================================
+async function analyzeWeeklyImport() {
+  const summaryFile =
+    document.getElementById(
+      'summary-file'
+    )?.files?.[0];
 
-async function analyzeShiftImport() {
-  const summaryInput = document.getElementById('summary-file');
-  const coverageInput = document.getElementById('coverage-files');
-  const analyzeButton = document.getElementById('analyze-import-btn');
+  const coverageFiles =
+    Array.from(
+      document.getElementById(
+        'coverage-files'
+      )?.files || []
+    );
 
-  const summaryFile = summaryInput?.files?.[0];
-  const coverageFiles = Array.from(coverageInput?.files || []);
+  const analyzeButton =
+    document.getElementById(
+      'analyze-import-btn'
+    );
 
   if (!summaryFile) {
-    showToast('Choose the MT5 Summary HTML file first.', 'error');
+    showToast(
+      'Choose the weekly MT5 Summary HTML first.',
+      'error'
+    );
+
     return;
   }
+
   if (!coverageFiles.length) {
-    showToast('Choose at least one Coverage History HTML file.', 'error');
+    showToast(
+      'Choose at least one Coverage History HTML file.',
+      'error'
+    );
+
     return;
   }
 
   if (analyzeButton) {
     analyzeButton.disabled = true;
-    analyzeButton.textContent = 'Analyzing…';
+    analyzeButton.textContent =
+      'Analyzing…';
   }
-  setImportStatus(`Analyzing ${selectedImportShift} files…`, 'working');
+
+  setImportStatus(
+    'Reading weekly Summary and Coverage History…',
+    'working'
+  );
 
   try {
-    const summaryHTML = await readMT5File(summaryFile);
-    const summary = parseSummaryHTML(summaryHTML);
-    validateShiftSequence(summary.reportDate, selectedImportShift);
+    const summaryHTML =
+      await readMT5File(
+        summaryFile
+      );
+
+    const summary =
+      parseWeeklySummaryHTML(
+        summaryHTML
+      );
 
     const coverageReports = [];
-    for (const file of coverageFiles) {
-      const html = await readMT5File(file);
-      coverageReports.push(parseCoverageHistoryHTML(html, file.name));
+
+    for (
+      const file of
+      coverageFiles
+    ) {
+      const html =
+        await readMT5File(
+          file
+        );
+
+      coverageReports.push(
+        parseCoverageHistoryHTML(
+          html,
+          file.name
+        )
+      );
     }
 
-    const snapshotAccounts = snapshotObjectFromSummary(summary);
-    const previousShift = previousShiftName(selectedImportShift);
-    const baselineSnapshot = previousShift
-      ? (shiftStore?.[currentBranch]?.[summary.reportDate]?.[previousShift]?.snapshotAccounts || {})
-      : {};
+    const mapSnapshot =
+      await db.ref(
+        `pl_cover_position_map/${currentBranch}`
+      ).once('value');
+
+    const liveCoverMapForBranch =
+      mapSnapshot.val() || {};
 
     const mappingUpdates = {};
+
+    coverageReports.forEach(
+      report => {
+        const accountKey =
+          firebaseSafeKey(
+            report.accountId
+          );
+
+        const persistentAccountMap =
+          liveCoverMapForBranch?.[
+            accountKey
+          ] || {};
+
+        report.positions.forEach(
+          position => {
+            const login =
+              position.directComment ||
+              report.orders[
+                position.positionId
+              ]?.comment ||
+              persistentAccountMap?.[
+                firebaseSafeKey(
+                  position.positionId
+                )
+              ] ||
+              '';
+
+            if (!login) return;
+
+            if (
+              !mappingUpdates[
+                accountKey
+              ]
+            ) {
+              mappingUpdates[
+                accountKey
+              ] = {};
+            }
+
+            mappingUpdates[
+              accountKey
+            ][
+              firebaseSafeKey(
+                position.positionId
+              )
+            ] = login;
+          }
+        );
+      }
+    );
+
     const coverageByLogin = {};
     const matchedDeals = [];
     const unmatchedDeals = [];
     const seenDeals = new Set();
-    let historicalOrOtherShiftDealsIgnored = 0;
 
-    coverageReports.forEach(report => {
-      const accountKey = firebaseSafeKey(report.accountId);
-      const persistentAccountMap = coverPositionMap?.[currentBranch]?.[accountKey] || {};
+    let historicalOutDealsIgnored = 0;
+    let allOutDealsSeen = 0;
 
-      // Learn every position/client mapping from the full uploaded history.
-      report.positions.forEach(position => {
-        const login = positionLogin(position, report, persistentAccountMap);
-        if (!login) return;
-        if (!mappingUpdates[accountKey]) mappingUpdates[accountKey] = {};
-        mappingUpdates[accountKey][firebaseSafeKey(position.positionId)] = login;
-      });
+    coverageReports.forEach(
+      report => {
+        const accountKey =
+          firebaseSafeKey(
+            report.accountId
+          );
 
-      report.deals.forEach(deal => {
-        const uniqueDealKey = `${accountKey}_${firebaseSafeKey(deal.dealId)}`;
-        if (seenDeals.has(uniqueDealKey)) return;
-        seenDeals.add(uniqueDealKey);
+        const persistentAccountMap =
+          liveCoverMapForBranch?.[
+            accountKey
+          ] || {};
 
-        if (deal.direction !== 'out') return;
-        if (!timestampInShift(deal.time, summary.reportDateDot, selectedImportShift)) {
-          historicalOrOtherShiftDealsIgnored += 1;
-          return;
-        }
-
-        const resolution = resolveDealLogin(deal, report, persistentAccountMap);
-        const normalized = {
-          ...deal,
-          accountId: accountKey,
-          recordKey: uniqueDealKey,
-          login: resolution.login,
-          matchMethod: resolution.method,
-          positionId: resolution.positionId || ''
+        const workingAccountMap = {
+          ...persistentAccountMap,
+          ...(
+            mappingUpdates[
+              accountKey
+            ] || {}
+          )
         };
 
-        if (resolution.login) {
-          matchedDeals.push(normalized);
-          coverageByLogin[resolution.login] = roundMoney((coverageByLogin[resolution.login] || 0) + deal.profit);
-        } else {
-          unmatchedDeals.push(normalized);
-        }
-      });
-    });
+        report.deals.forEach(
+          deal => {
+            if (
+              deal.direction !==
+              'out'
+            ) {
+              return;
+            }
 
-    const accounts = deriveShiftAccounts(snapshotAccounts, baselineSnapshot, coverageByLogin);
-    const rows = Object.values(accounts);
-    const { winners, losers } = rankEntries(rows, 3);
+            allOutDealsSeen += 1;
+
+            const uniqueDealKey =
+              `${accountKey}_${
+                firebaseSafeKey(
+                  deal.dealId
+                )
+              }`;
+
+            if (
+              seenDeals.has(
+                uniqueDealKey
+              )
+            ) {
+              return;
+            }
+
+            seenDeals.add(
+              uniqueDealKey
+            );
+
+            if (
+              !timestampInWeek(
+                deal.time,
+                summary.weekStartDot,
+                summary.weekEndDot
+              )
+            ) {
+              historicalOutDealsIgnored += 1;
+              return;
+            }
+
+            const resolution =
+              resolveDealLogin(
+                deal,
+                report,
+                workingAccountMap
+              );
+
+            const normalized = {
+              accountId:
+                accountKey,
+
+              sourceFile:
+                deal.sourceFile ||
+                report.fileName ||
+                '',
+
+              recordKey:
+                uniqueDealKey,
+
+              dealId:
+                deal.dealId,
+
+              time:
+                deal.time,
+
+              symbol:
+                deal.symbol,
+
+              type:
+                deal.type,
+
+              direction:
+                deal.direction,
+
+              volume:
+                deal.volume,
+
+              price:
+                deal.price,
+
+              orderId:
+                deal.orderId,
+
+              profit:
+                roundMoney(
+                  deal.profit
+                ),
+
+              login:
+                resolution.login ||
+                '',
+
+              matchMethod:
+                resolution.method,
+
+              positionId:
+                resolution.positionId ||
+                ''
+            };
+
+            if (
+              resolution.login
+            ) {
+              matchedDeals.push(
+                normalized
+              );
+
+              coverageByLogin[
+                resolution.login
+              ] = roundMoney(
+                (
+                  coverageByLogin[
+                    resolution.login
+                  ] || 0
+                ) +
+                normalized.profit
+              );
+            }
+
+            else {
+              unmatchedDeals.push(
+                normalized
+              );
+            }
+          }
+        );
+      }
+    );
+
+    const accounts =
+      buildWeeklyAccounts(
+        summary.clientRows,
+        coverageByLogin
+      );
+
+    const accountRows =
+      Object.values(
+        accounts
+      );
+
+    const {
+      winners,
+      losers
+    } =
+      rankEntries(
+        accountRows,
+        5
+      );
+
+    const clientTotal =
+      roundMoney(
+        accountRows.reduce(
+          (sum, row) =>
+            sum + row.client,
+          0
+        )
+      );
+
+    const coverageTotal =
+      roundMoney(
+        accountRows.reduce(
+          (sum, row) =>
+            sum + row.coverage,
+          0
+        )
+      );
+
+    const brokerTotal =
+      roundMoney(
+        accountRows.reduce(
+          (sum, row) =>
+            sum +
+            row.brokerNet,
+          0
+        )
+      );
+
+    const matchedCoverageProfit =
+      roundMoney(
+        matchedDeals.reduce(
+          (sum, row) =>
+            sum + row.profit,
+          0
+        )
+      );
+
+    const unmatchedCoverageProfit =
+      roundMoney(
+        unmatchedDeals.reduce(
+          (sum, row) =>
+            sum + row.profit,
+          0
+        )
+      );
 
     pendingImport = {
-      branch: currentBranch,
-      shift: selectedImportShift,
-      reportDate: summary.reportDate,
-      reportDateDot: summary.reportDateDot,
-      summaryFileName: summaryFile.name,
-      coverageFileNames: coverageFiles.map(file => file.name),
-      summaryRawRows: summary.rawRows,
-      snapshotAccounts,
-      baselineShift: previousShift,
-      baselineSnapshot,
+      version: 3,
+      branch:
+        currentBranch,
+
+      weekKey:
+        summary.weekKey,
+
+      weekStart:
+        summary.weekStart,
+
+      weekEnd:
+        summary.weekEnd,
+
+      weekStartDot:
+        summary.weekStartDot,
+
+      weekEndDot:
+        summary.weekEndDot,
+
+      weekLabel:
+        summary.weekLabel,
+
+      summaryFileName:
+        summaryFile.name,
+
+      coverageFileNames:
+        coverageFiles.map(
+          file =>
+            file.name
+        ),
+
+      summaryRawRows:
+        summary.rawRows,
+
+      summaryClientCount:
+        summary.clientRows.length,
+
+      accounts,
       coverageByLogin,
       matchedDeals,
       unmatchedDeals,
       mappingUpdates,
-      historicalOrOtherShiftDealsIgnored,
-      accounts,
+      historicalOutDealsIgnored,
+      allOutDealsSeen,
       winners,
-      losers
+      losers,
+
+      stats: {
+        accountCount:
+          accountRows.length,
+
+        clientTotal,
+        coverageTotal,
+        brokerTotal,
+
+        matchedCoverDeals:
+          matchedDeals.length,
+
+        unmatchedCoverDeals:
+          unmatchedDeals.length,
+
+        matchedCoverageProfit,
+        unmatchedCoverageProfit,
+        historicalOutDealsIgnored
+      }
     };
 
     renderImportPreview();
+    renderExistingWeekStatus();
+
     setImportStatus(
-      `${selectedImportShift} detected for ${formatISODate(summary.reportDate)} · ${rows.length} active shift accounts · ${matchedDeals.length} matched cover closes.`,
-      unmatchedDeals.length ? 'warning' : 'success'
+      `${summary.weekLabel} detected · ${summary.clientRows.length} client accounts · ${matchedDeals.length} matched cover closes${
+        unmatchedDeals.length
+          ? ` · ${unmatchedDeals.length} unmatched`
+          : ''
+      }.`,
+      unmatchedDeals.length
+        ? 'warning'
+        : 'success'
     );
 
-    const saveButton = document.getElementById('save-shift-import-btn');
-    if (saveButton) saveButton.disabled = false;
-  } catch (err) {
-    console.error('Shift import analysis failed:', err);
-    pendingImport = null;
-    setImportStatus(err.message || 'Could not analyze the files.', 'error');
-    showToast(err.message || 'Could not analyze the files.', 'error');
+    const saveButton =
+      document.getElementById(
+        'save-week-import-btn'
+      );
 
-    const preview = document.getElementById('import-preview');
-    if (preview) preview.innerHTML = '';
-    const saveButton = document.getElementById('save-shift-import-btn');
-    if (saveButton) saveButton.disabled = true;
-  } finally {
+    if (saveButton) {
+      saveButton.disabled =
+        false;
+    }
+  }
+
+  catch (err) {
+    console.error(
+      'Weekly import analysis failed:',
+      err
+    );
+
+    pendingImport = null;
+
+    const preview =
+      document.getElementById(
+        'import-preview'
+      );
+
+    if (preview) {
+      preview.innerHTML = '';
+    }
+
+    const saveButton =
+      document.getElementById(
+        'save-week-import-btn'
+      );
+
+    if (saveButton) {
+      saveButton.disabled = true;
+    }
+
+    setImportStatus(
+      err.message ||
+      'Could not analyze the files.',
+      'error'
+    );
+
+    showToast(
+      err.message ||
+      'Could not analyze the files.',
+      'error'
+    );
+
+    renderExistingWeekStatus();
+  }
+
+  finally {
     if (analyzeButton) {
-      analyzeButton.disabled = false;
-      analyzeButton.textContent = 'Analyze Files';
+      analyzeButton.disabled =
+        false;
+
+      analyzeButton.textContent =
+        'Analyze Week';
     }
   }
 }
 
-function renderImportPreview() {
-  const preview = document.getElementById('import-preview');
-  if (!preview || !pendingImport) return;
+// ============================================================================
+// IMPORT PREVIEW
+// ============================================================================
 
-  const rows = Object.values(pendingImport.accounts || {});
-  const clientTotal = roundMoney(rows.reduce((sum, row) => sum + row.client, 0));
-  const coverTotal = roundMoney(rows.reduce((sum, row) => sum + row.coverage, 0));
-  const netTotal = roundMoney(rows.reduce((sum, row) => sum + row.brokerNet, 0));
-  const matchedProfit = roundMoney(pendingImport.matchedDeals.reduce((sum, row) => sum + row.profit, 0));
+function renderImportPreview() {
+  const preview =
+    document.getElementById(
+      'import-preview'
+    );
+
+  if (
+    !preview ||
+    !pendingImport
+  ) {
+    return;
+  }
+
+  const stats =
+    pendingImport.stats;
 
   preview.innerHTML = `
     <div class="import-summary-grid">
-      <div class="import-stat"><span>REPORT DATE</span><strong>${escapeHTML(formatISODate(pendingImport.reportDate))}</strong></div>
-      <div class="import-stat"><span>SHIFT</span><strong>${escapeHTML(pendingImport.shift)} · ${escapeHTML(SHIFT_CONFIG[pendingImport.shift].display)}</strong></div>
-      <div class="import-stat"><span>CLIENT P/L</span><strong class="${clientTotal >= 0 ? 'net-positive' : 'net-negative'}">${formatCurrency(clientTotal)}</strong></div>
-      <div class="import-stat"><span>COVER PROFIT</span><strong class="${coverTotal >= 0 ? 'net-positive' : 'net-negative'}">${formatCurrency(coverTotal)}</strong></div>
-      <div class="import-stat"><span>BROKER NET</span><strong class="${netTotal >= 0 ? 'net-positive' : 'net-negative'}">${formatCurrency(netTotal)}</strong></div>
-      <div class="import-stat"><span>MATCHED OUT DEALS</span><strong>${pendingImport.matchedDeals.length} · ${formatCurrency(matchedProfit)}</strong></div>
+
+      <div class="import-stat">
+        <span>DETECTED WEEK</span>
+        <strong>
+          ${escapeHTML(
+            pendingImport.weekLabel
+          )}
+        </strong>
+      </div>
+
+      <div class="import-stat">
+        <span>CLIENT ACCOUNTS</span>
+        <strong>
+          ${stats.accountCount}
+        </strong>
+      </div>
+
+      <div class="import-stat">
+        <span>CLIENT P/L</span>
+        <strong class="${
+          stats.clientTotal >= 0
+            ? 'net-positive'
+            : 'net-negative'
+        }">
+          ${formatCurrency(
+            stats.clientTotal
+          )}
+        </strong>
+      </div>
+
+      <div class="import-stat">
+        <span>COVER PROFIT</span>
+        <strong class="${
+          stats.coverageTotal >= 0
+            ? 'net-positive'
+            : 'net-negative'
+        }">
+          ${formatCurrency(
+            stats.coverageTotal
+          )}
+        </strong>
+      </div>
+
+      <div class="import-stat">
+        <span>BROKER NET</span>
+        <strong class="${
+          stats.brokerTotal >= 0
+            ? 'net-positive'
+            : 'net-negative'
+        }">
+          ${formatCurrency(
+            stats.brokerTotal
+          )}
+        </strong>
+      </div>
+
+      <div class="import-stat">
+        <span>COVER MATCH</span>
+        <strong>
+          ${stats.matchedCoverDeals}
+          matched ·
+          ${stats.unmatchedCoverDeals}
+          unmatched
+        </strong>
+      </div>
+
     </div>
 
     <div class="preview-grid">
-      ${previewRankingCard(`${pendingImport.shift} Top 3 Winners`, pendingImport.winners, 'winner')}
-      ${previewRankingCard(`${pendingImport.shift} Top 3 Losers`, pendingImport.losers, 'loser')}
+
+      ${
+        rankingCard(
+          'Weekly Top 5 Winners',
+          pendingImport.winners,
+          'winner',
+          false
+        )
+      }
+
+      ${
+        rankingCard(
+          'Weekly Top 5 Losers',
+          pendingImport.losers,
+          'loser',
+          false
+        )
+      }
+
     </div>
 
-    ${pendingImport.unmatchedDeals.length ? renderUnmatchedDeals(pendingImport.unmatchedDeals) : `
-      <div class="match-ok">✓ Every ${pendingImport.shift} coverage OUT deal was matched to a client login.</div>
-    `}
+    ${
+      pendingImport
+        .unmatchedDeals
+        .length
+        ? renderUnmatchedDeals(
+            pendingImport
+              .unmatchedDeals
+          )
+        : `
+          <div class="match-ok">
+            ✓ Every coverage OUT deal inside
+            ${escapeHTML(
+              pendingImport.weekLabel
+            )}
+            was matched to a client login.
+          </div>
+        `
+    }
+
+    ${
+      renderAccountsSection(
+        pendingImport.accounts,
+        'All Weekly Accounts',
+        'preview'
+      )
+    }
+
+    ${
+      renderCoverageAuditSection(
+        pendingImport.matchedDeals,
+        pendingImport.unmatchedDeals
+      )
+    }
   `;
-}
-
-function previewRankingCard(title, rows, type) {
-  const body = rows.length
-    ? rows.map((row, index) => `
-        <tr>
-          <td>#${index + 1}</td>
-          <td><strong>${escapeHTML(row.login)}</strong></td>
-          <td class="${type === 'winner' ? 'tag-winner' : 'tag-loser'}">${formatCurrency(row.client)}</td>
-          <td>${formatCurrency(row.coverage)}</td>
-          <td class="${row.brokerNet >= 0 ? 'net-positive' : 'net-negative'}">${formatCurrency(row.brokerNet)}</td>
-        </tr>`).join('')
-    : '<tr><td colspan="5" class="muted" style="text-align:center;padding:16px;">No data</td></tr>';
-
-  return `
-    <div class="branch-card preview-card">
-      <h3>${escapeHTML(title)}</h3>
-      <div class="table-scroll">
-        <table class="matrix-table">
-          <thead><tr><th>RANK</th><th>LOGIN</th><th>CLIENT P/L</th><th>COVER</th><th>BROKER NET</th></tr></thead>
-          <tbody>${body}</tbody>
-        </table>
-      </div>
-    </div>`;
 }
 
 function renderUnmatchedDeals(rows) {
-  const total = roundMoney(rows.reduce((sum, row) => sum + row.profit, 0));
+  const total =
+    roundMoney(
+      rows.reduce(
+        (sum, row) =>
+          sum + row.profit,
+        0
+      )
+    );
+
+  const body =
+    rows.map(row => `
+      <tr>
+
+        <td>
+          ${escapeHTML(
+            row.accountId
+          )}
+        </td>
+
+        <td>
+          ${escapeHTML(
+            row.dealId
+          )}
+        </td>
+
+        <td>
+          ${escapeHTML(
+            row.time
+          )}
+        </td>
+
+        <td>
+          ${escapeHTML(
+            row.symbol
+          )}
+        </td>
+
+        <td>
+          ${escapeHTML(
+            String(
+              row.volume
+            )
+          )}
+        </td>
+
+        <td class="${
+          row.profit >= 0
+            ? 'net-positive'
+            : 'net-negative'
+        }">
+          ${formatCurrency(
+            row.profit
+          )}
+        </td>
+
+        <td>
+          ${escapeHTML(
+            row.orderId
+          )}
+        </td>
+
+      </tr>
+    `).join('');
+
   return `
-    <div class="unmatched-card">
-      <div class="unmatched-heading">
+    <div class="warning-panel">
+
+      <div class="warning-panel-title">
+
         <div>
-          <strong>Unmatched Coverage Deals</strong>
-          <p>No manual typing is required. These deals are saved as unmatched. Re-import the same shift with a longer Coverage History if you want the system to recover their client comments.</p>
+          <strong>
+            Unmatched Coverage Deals
+          </strong>
+
+          <span>
+            ${rows.length}
+            closing deal(s) ·
+            ${formatCurrency(total)}
+            excluded from matched Coverage P/L
+          </span>
         </div>
-        <span class="warning-pill">${rows.length} deals · ${formatCurrency(total)}</span>
+
+        <span class="status-badge check">
+          CHECK
+        </span>
+
       </div>
+
+      <p>
+        No P/L is guessed.
+        Re-import the same week with a longer
+        Coverage History if older opening
+        comments are missing.
+      </p>
+
       <div class="table-scroll">
-        <table class="matrix-table">
-          <thead><tr><th>COVER ACCOUNT</th><th>DEAL</th><th>TIME</th><th>SYMBOL</th><th>VOLUME</th><th>PROFIT</th></tr></thead>
-          <tbody>${rows.map(row => `
+
+        <table class="matrix-table compact-table">
+
+          <thead>
             <tr>
-              <td>${escapeHTML(row.accountId)}</td>
-              <td>${escapeHTML(row.dealId)}</td>
-              <td>${escapeHTML(row.time)}</td>
-              <td>${escapeHTML(row.symbol)}</td>
-              <td>${escapeHTML(row.volume)}</td>
-              <td class="${row.profit >= 0 ? 'net-positive' : 'net-negative'}">${formatCurrency(row.profit)}</td>
-            </tr>`).join('')}</tbody>
+              <th>COVER ACCT</th>
+              <th>DEAL</th>
+              <th>TIME</th>
+              <th>SYMBOL</th>
+              <th>VOL</th>
+              <th>PROFIT</th>
+              <th>ORDER</th>
+            </tr>
+          </thead>
+
+          <tbody>
+            ${body}
+          </tbody>
+
         </table>
-      </div>
-    </div>`;
-}
 
-// ============================================================================
-// SAVE SHIFT + RECALCULATE DAY
-// ============================================================================
-
-async function saveShiftImport() {
-  if (!pendingImport) {
-    showToast('Analyze the files first.', 'error');
-    return;
-  }
-
-  if (pendingImport.branch !== currentBranch || pendingImport.shift !== selectedImportShift) {
-    showToast('Branch or shift changed. Analyze again before saving.', 'error');
-    return;
-  }
-
-  const existing = shiftStore?.[currentBranch]?.[pendingImport.reportDate]?.[pendingImport.shift];
-  if (existing) {
-    const replace = confirm(
-      `${currentBranch.toUpperCase()} already has ${pendingImport.shift} saved for ${pendingImport.reportDate}.\n\n` +
-      `Saving now will replace that shift and automatically recalculate dependent shift totals.\n\nContinue?`
-    );
-    if (!replace) return;
-  }
-
-  if (pendingImport.unmatchedDeals.length) {
-    const proceed = confirm(
-      `${pendingImport.unmatchedDeals.length} coverage OUT deal(s) could not be matched automatically.\n\n` +
-      `They will be SAVED as unmatched and excluded from Coverage P/L until you re-import this shift with enough history to match them.\n\nContinue?`
-    );
-    if (!proceed) return;
-  }
-
-  const saveButton = document.getElementById('save-shift-import-btn');
-  if (saveButton) {
-    saveButton.disabled = true;
-    saveButton.textContent = 'Saving…';
-  }
-
-  const oldDay = deepClone(shiftStore?.[currentBranch]?.[pendingImport.reportDate] || {});
-  oldDay[pendingImport.shift] = {
-    branch: currentBranch,
-    reportDate: pendingImport.reportDate,
-    shift: pendingImport.shift,
-    shiftWindow: SHIFT_CONFIG[pendingImport.shift].display,
-    importedAt: firebase.database.ServerValue.TIMESTAMP,
-    summaryFile: pendingImport.summaryFileName,
-    coverageFiles: pendingImport.coverageFileNames,
-    snapshotAccounts: pendingImport.snapshotAccounts,
-    coverageByLogin: pendingImport.coverageByLogin,
-    unmatchedDeals: pendingImport.unmatchedDeals.map(row => ({
-      accountId: row.accountId,
-      dealId: row.dealId,
-      time: row.time,
-      symbol: row.symbol,
-      type: row.type,
-      volume: row.volume,
-      profit: row.profit
-    })),
-    stats: {
-      summaryRows: pendingImport.summaryRawRows,
-      matchedCoverDeals: pendingImport.matchedDeals.length,
-      unmatchedCoverDeals: pendingImport.unmatchedDeals.length,
-      ignoredOtherDeals: pendingImport.historicalOrOtherShiftDealsIgnored
-    }
-  };
-
-  const recalculatedDay = recalculateDayRecords(oldDay);
-  const updates = {};
-  updates[`pl_shift_store/${currentBranch}/${pendingImport.reportDate}`] = recalculatedDay;
-
-  Object.entries(pendingImport.mappingUpdates).forEach(([accountId, positions]) => {
-    Object.entries(positions).forEach(([positionId, login]) => {
-      updates[`pl_cover_position_map/${currentBranch}/${accountId}/${positionId}`] = login;
-    });
-  });
-
-  try {
-    await db.ref().update(updates);
-    showToast(`${currentBranch.toUpperCase()} ${pendingImport.shift} saved for ${pendingImport.reportDate}.`);
-    setImportStatus(`Saved ${pendingImport.shift} for ${formatISODate(pendingImport.reportDate)}. Weekly totals recalculated automatically.`, 'success');
-    pendingImport = null;
-    clearFileInputs();
-    const preview = document.getElementById('import-preview');
-    if (preview) preview.innerHTML = '';
-    renderShiftLedger();
-    renderSelectedShiftState();
-  } catch (err) {
-    console.error('Shift save failed:', err);
-    showToast('Save failed. Check Firebase and try again.', 'error');
-  } finally {
-    if (saveButton) {
-      saveButton.disabled = true;
-      saveButton.textContent = 'Save Shift';
-    }
-  }
-}
-
-function resetImportUI(clearFiles = true) {
-  pendingImport = null;
-  if (clearFiles) clearFileInputs();
-
-  const preview = document.getElementById('import-preview');
-  if (preview) preview.innerHTML = '';
-
-  const saveButton = document.getElementById('save-shift-import-btn');
-  if (saveButton) saveButton.disabled = true;
-
-  setImportStatus(`Selected ${selectedImportShift} (${SHIFT_CONFIG[selectedImportShift].display}). Upload the Summary and Coverage History.`, 'neutral');
-}
-
-function clearFileInputs() {
-  const summary = document.getElementById('summary-file');
-  const coverage = document.getElementById('coverage-files');
-  if (summary) summary.value = '';
-  if (coverage) coverage.value = '';
-}
-
-function setImportStatus(message, type = 'neutral') {
-  const status = document.getElementById('import-status');
-  if (!status) return;
-  status.textContent = message;
-  status.className = `import-status ${type}`;
-}
-
-// ============================================================================
-// SAVED SHIFT LEDGER / DETAILS
-// ============================================================================
-
-function renderShiftLedger() {
-  const container = document.getElementById('shift-ledger-container');
-  if (!container) return;
-
-  const dateKeys = getWeekDateKeys();
-  const branchData = shiftStore[currentBranch] || {};
-
-  let rows = '';
-  dateKeys.forEach(date => {
-    SHIFT_ORDER.forEach(shift => {
-      const record = branchData?.[date]?.[shift];
-      if (!record) {
-        rows += `
-          <tr>
-            <td>${escapeHTML(formatISODate(date))}</td>
-            <td><span class="shift-badge shift-${shift.toLowerCase()}">${shift}</span></td>
-            <td><span class="ledger-status missing">NOT IMPORTED</span></td>
-            <td>—</td><td>—</td><td>—</td><td>—</td><td></td>
-          </tr>`;
-        return;
-      }
-
-      const stats = record.stats || {};
-      const incomplete = Number(stats.unmatchedCoverDeals || 0) > 0 || record.baselineMissing;
-      rows += `
-        <tr>
-          <td>${escapeHTML(formatISODate(date))}</td>
-          <td><span class="shift-badge shift-${shift.toLowerCase()}">${shift}</span></td>
-          <td><span class="ledger-status ${incomplete ? 'warning' : 'complete'}">${incomplete ? 'CHECK' : 'SAVED'}</span></td>
-          <td>${Number(stats.storedAccounts || 0)}</td>
-          <td class="${Number(stats.clientShiftTotal || 0) >= 0 ? 'net-positive' : 'net-negative'}">${formatCurrency(stats.clientShiftTotal || 0)}</td>
-          <td class="${Number(stats.coverShiftTotal || 0) >= 0 ? 'net-positive' : 'net-negative'}">${formatCurrency(stats.coverShiftTotal || 0)}</td>
-          <td class="${Number(stats.brokerShiftNet || 0) >= 0 ? 'net-positive' : 'net-negative'}">${formatCurrency(stats.brokerShiftNet || 0)}</td>
-          <td><button class="table-action-btn" onclick="viewShiftDetails('${date}','${shift}')">View</button></td>
-        </tr>`;
-    });
-  });
-
-  container.innerHTML = `
-    <div class="table-card">
-      <div class="table-scroll">
-        <table class="matrix-table">
-          <thead><tr><th>DATE</th><th>SHIFT</th><th>STATUS</th><th>ACCOUNTS</th><th>CLIENT P/L</th><th>COVER PROFIT</th><th>BROKER NET</th><th></th></tr></thead>
-          <tbody>${rows}</tbody>
-        </table>
-      </div>
-    </div>`;
-}
-
-function viewShiftDetails(date, shift) {
-  const container = document.getElementById('shift-detail-container');
-  const record = shiftStore?.[currentBranch]?.[date]?.[shift];
-  if (!container || !record) return;
-
-  const entries = Object.values(record.accounts || {});
-  const { winners, losers } = rankEntries(entries, 3);
-  const sorted = [...entries].sort((a, b) => Math.abs(b.client) - Math.abs(a.client));
-  const unmatched = record.unmatchedDeals || [];
-
-  container.innerHTML = `
-    <div class="shift-detail-card">
-      <div class="section-heading">
-        <div>
-          <div class="eyebrow">${escapeHTML(currentBranch.toUpperCase())} · ${escapeHTML(shift)}</div>
-          <h2>${escapeHTML(formatISODate(date))} — Full Saved Shift</h2>
-        </div>
-        <button class="ghost-btn" onclick="document.getElementById('shift-detail-container').innerHTML=''">Close</button>
       </div>
 
-      <div class="preview-grid">
-        ${previewRankingCard('Top 3 Winners', winners, 'winner')}
-        ${previewRankingCard('Top 3 Losers', losers, 'loser')}
-      </div>
-
-      <div class="section-heading compact-heading">
-        <div><div class="eyebrow">ALL SAVED ACCOUNTS</div><h2>${entries.length} accounts</h2></div>
-        <div class="section-note">Shift totals are what feed Group 5</div>
-      </div>
-      <div class="table-card">
-        <div class="table-scroll">
-          <table class="matrix-table">
-            <thead><tr><th>LOGIN</th><th>NAME</th><th>CLIENT P/L</th><th>COVER PROFIT</th><th>BROKER NET</th></tr></thead>
-            <tbody>${sorted.length ? sorted.map(row => `
-              <tr>
-                <td><strong>${escapeHTML(row.login)}</strong></td>
-                <td>${escapeHTML(row.name || '')}</td>
-                <td class="${row.client >= 0 ? 'tag-winner' : 'tag-loser'}">${formatCurrency(row.client)}</td>
-                <td class="${row.coverage >= 0 ? 'net-positive' : 'net-negative'}">${formatCurrency(row.coverage)}</td>
-                <td class="${row.brokerNet >= 0 ? 'net-positive' : 'net-negative'}">${formatCurrency(row.brokerNet)}</td>
-              </tr>`).join('') : '<tr><td colspan="5" class="muted" style="text-align:center;padding:18px;">No shift activity</td></tr>'}</tbody>
-          </table>
-        </div>
-      </div>
-
-      ${unmatched.length ? `
-        <div class="unmatched-card ledger-unmatched">
-          <div class="unmatched-heading"><div><strong>Saved Unmatched Coverage</strong><p>Re-import this same shift with a longer history to attempt automatic matching.</p></div><span class="warning-pill">${unmatched.length} deals</span></div>
-        </div>` : ''}
-    </div>`;
-
-  container.scrollIntoView({ behavior: 'smooth', block: 'start' });
-}
-
-// ============================================================================
-// WEEKLY EXECUTIVE ENGINE — ALL SAVED SHIFTS
-// ============================================================================
-
-function aggregateBranchWeek(branchData, dateKeys = getWeekDateKeys()) {
-  const netByLogin = {};
-  const allowedDates = new Set(dateKeys);
-
-  Object.entries(branchData || {}).forEach(([dateKey, dayData]) => {
-    if (!allowedDates.has(dateKey)) return;
-
-    SHIFT_ORDER.forEach(shift => {
-      const record = dayData?.[shift];
-      if (!record) return;
-
-      Object.values(record.accounts || {}).forEach(account => {
-        const login = String(account.login || '').trim();
-        if (!login) return;
-
-        if (!netByLogin[login]) {
-          netByLogin[login] = {
-            login,
-            name: account.name || '',
-            client: 0,
-            coverage: 0,
-            dates: new Set(),
-            shiftCount: 0
-          };
-        }
-
-        const target = netByLogin[login];
-        target.client += parseCurrencyNumber(account.client);
-        target.coverage += parseCurrencyNumber(account.coverage);
-        target.dates.add(dateKey);
-        target.shiftCount += 1;
-        if (!target.name && account.name) target.name = account.name;
-      });
-    });
-  });
-
-  return Object.values(netByLogin).map(row => ({
-    login: row.login,
-    name: row.name,
-    client: roundMoney(row.client),
-    coverage: roundMoney(row.coverage),
-    brokerNet: brokerNet(row.client, row.coverage),
-    days: Array.from(row.dates).sort(),
-    occurrences: row.shiftCount
-  }));
-}
-
-function rankEntries(entries, limit = 5) {
-  return {
-    winners: entries.filter(row => row.client > 0).sort((a, b) => b.client - a.client).slice(0, limit),
-    losers: entries.filter(row => row.client < 0).sort((a, b) => a.client - b.client).slice(0, limit)
-  };
-}
-
-function computeWeeklyBranch(branch, sourceStore = shiftStore, dateKeys = getWeekDateKeys()) {
-  const entries = aggregateBranchWeek(sourceStore?.[branch] || {}, dateKeys);
-  return { ...rankEntries(entries, 5), entries };
-}
-
-function computeCombinedWeekly(sourceStore = shiftStore, dateKeys = getWeekDateKeys()) {
-  const combined = {};
-
-  allBranches.forEach(branch => {
-    aggregateBranchWeek(sourceStore?.[branch] || {}, dateKeys).forEach(row => {
-      if (!combined[row.login]) {
-        combined[row.login] = {
-          login: row.login,
-          name: row.name || '',
-          client: 0,
-          coverage: 0,
-          days: new Set(),
-          shifts: 0,
-          branches: new Set()
-        };
-      }
-
-      const target = combined[row.login];
-      target.client += row.client;
-      target.coverage += row.coverage;
-      target.shifts += row.occurrences;
-      target.branches.add(branch);
-      row.days.forEach(day => target.days.add(day));
-      if (!target.name && row.name) target.name = row.name;
-    });
-  });
-
-  const entries = Object.values(combined).map(row => ({
-    login: row.login,
-    name: row.name,
-    client: roundMoney(row.client),
-    coverage: roundMoney(row.coverage),
-    brokerNet: brokerNet(row.client, row.coverage),
-    days: Array.from(row.days).sort(),
-    occurrences: row.shifts,
-    branches: Array.from(row.branches).sort()
-  }));
-
-  return { ...rankEntries(entries, 5), entries };
-}
-
-function renderManagementView() {
-  updateWeekLabels();
-  const dateKeys = getWeekDateKeys();
-  const combined = computeCombinedWeekly(shiftStore, dateKeys);
-
-  const combinedContainer = document.getElementById('combined-tables-container');
-  if (combinedContainer) {
-    combinedContainer.innerHTML =
-      rankingCard('Top 5 Winners', combined.winners, 'winner', true) +
-      rankingCard('Top 5 Losers', combined.losers, 'loser', true);
-  }
-
-  const container = document.getElementById('management-tables-container');
-  if (container) {
-    container.innerHTML = '';
-    allBranches.forEach(branch => {
-      const result = computeWeeklyBranch(branch, shiftStore, dateKeys);
-      container.innerHTML += rankingCard(`${branch.toUpperCase()} — Top 5 Winners`, result.winners, 'winner', false);
-      container.innerHTML += rankingCard(`${branch.toUpperCase()} — Top 5 Losers`, result.losers, 'loser', false);
-    });
-  }
-
-  renderExecutiveSourceStatus(dateKeys);
-}
-
-function renderExecutiveSourceStatus(dateKeys) {
-  const note = document.getElementById('executive-source-status');
-  if (!note) return;
-
-  let savedShifts = 0;
-  let incompleteShifts = 0;
-  let branchesWithData = 0;
-
-  allBranches.forEach(branch => {
-    let hasData = false;
-    dateKeys.forEach(date => {
-      SHIFT_ORDER.forEach(shift => {
-        const record = shiftStore?.[branch]?.[date]?.[shift];
-        if (!record) return;
-        savedShifts += 1;
-        hasData = true;
-        if (record.baselineMissing || Number(record.stats?.unmatchedCoverDeals || 0) > 0) incompleteShifts += 1;
-      });
-    });
-    if (hasData) branchesWithData += 1;
-  });
-
-  note.innerHTML = `
-    <span class="status-dot ${savedShifts ? 'good' : 'neutral'}"></span>
-    ${branchesWithData}/${allBranches.length} branches active · ${savedShifts} shift reports saved this week
-    ${incompleteShifts ? `<span class="status-separator">·</span> <span class="warning-text">${incompleteShifts} shift(s) need coverage review</span>` : ''}
+    </div>
   `;
 }
 
-function rankingCard(title, rows, type, includeBranch) {
+function renderAccountsSection(
+  accountsObject,
+  title = 'All Accounts',
+  mode = 'saved'
+) {
+  const rows =
+    Object.values(
+      accountsObject || {}
+    )
+      .sort(
+        (a, b) =>
+          b.client -
+            a.client ||
+          String(a.login)
+            .localeCompare(
+              String(b.login)
+            )
+      );
+
+  const tableRows =
+    rows.length
+
+      ? rows.map(row => `
+          <tr
+            data-account-row
+            data-search="${
+              escapeHTML(
+                `${
+                  row.login
+                } ${
+                  row.name || ''
+                } ${
+                  row.group || ''
+                }`.toLowerCase()
+              )
+            }"
+          >
+
+            <td>
+              <strong>
+                ${escapeHTML(
+                  row.login
+                )}
+              </strong>
+            </td>
+
+            <td>
+              ${escapeHTML(
+                row.name || '—'
+              )}
+            </td>
+
+            <td class="muted">
+              ${escapeHTML(
+                row.group || '—'
+              )}
+            </td>
+
+            <td class="${
+              row.client >= 0
+                ? 'tag-winner'
+                : 'tag-loser'
+            }">
+              ${formatCurrency(
+                row.client
+              )}
+            </td>
+
+            <td class="${
+              row.coverage >= 0
+                ? 'net-positive'
+                : 'net-negative'
+            }">
+              ${formatCurrency(
+                row.coverage
+              )}
+            </td>
+
+            <td class="${
+              row.brokerNet >= 0
+                ? 'net-positive'
+                : 'net-negative'
+            }">
+              ${formatCurrency(
+                row.brokerNet
+              )}
+            </td>
+
+          </tr>
+        `).join('')
+
+      : `
+        <tr>
+          <td
+            colspan="6"
+            class="empty-cell"
+          >
+            No accounts
+          </td>
+        </tr>
+      `;
+
   return `
-    <div class="branch-card">
-      <h3>${escapeHTML(title)}</h3>
-      <div class="table-scroll">
-        <table class="matrix-table">
-          <thead><tr><th>RANK</th><th>LOGIN</th>${includeBranch ? '<th>BRANCH</th>' : ''}<th>CLIENT P/L</th><th>COVER PROFIT</th><th>BROKER NET</th><th>SHIFTS</th></tr></thead>
-          <tbody>${renderRankingRows(rows, type, includeBranch)}</tbody>
-        </table>
+    <div class="accounts-panel">
+
+      <div class="accounts-panel-head">
+
+        <div>
+
+          <div class="eyebrow">
+            FULL SOURCE DATA
+          </div>
+
+          <h3>
+            ${escapeHTML(title)}
+            <span>
+              ${rows.length}
+            </span>
+          </h3>
+
+        </div>
+
+        <input
+          class="account-search"
+          type="search"
+          placeholder="Search login / name / group…"
+          oninput="filterAccountTable(this)"
+        >
+
       </div>
-    </div>`;
+
+      <div class="table-scroll tall-scroll">
+
+        <table class="matrix-table">
+
+          <thead>
+            <tr>
+              <th>LOGIN</th>
+              <th>NAME</th>
+              <th>GROUP</th>
+              <th>CLIENT P/L</th>
+              <th>COVER PROFIT</th>
+              <th>BROKER NET</th>
+            </tr>
+          </thead>
+
+          <tbody>
+            ${tableRows}
+          </tbody>
+
+        </table>
+
+      </div>
+
+    </div>
+  `;
 }
 
-function renderRankingRows(rows, type, includeBranch) {
+function filterAccountTable(input) {
+  const query =
+    String(
+      input.value || ''
+    )
+      .trim()
+      .toLowerCase();
+
+  const panel =
+    input.closest(
+      '.accounts-panel'
+    );
+
+  if (!panel) return;
+
+  panel
+    .querySelectorAll(
+      '[data-account-row]'
+    )
+    .forEach(row => {
+      const haystack =
+        String(
+          row.dataset.search ||
+          ''
+        ).toLowerCase();
+
+      row.style.display =
+        !query ||
+        haystack.includes(query)
+          ? ''
+          : 'none';
+    });
+}
+
+function renderCoverageAuditSection(
+  matchedDeals,
+  unmatchedDeals
+) {
+  const rows = [
+    ...(matchedDeals || []),
+    ...(unmatchedDeals || [])
+  ]
+    .sort(
+      (a, b) =>
+        String(a.time)
+          .localeCompare(
+            String(b.time)
+          ) ||
+        String(a.dealId)
+          .localeCompare(
+            String(b.dealId)
+          )
+    );
+
   if (!rows.length) {
-    return `<tr><td colspan="${includeBranch ? 7 : 6}" class="muted" style="text-align:center;padding:18px;">No saved shift imports yet</td></tr>`;
+    return `
+      <details class="audit-panel">
+
+        <summary>
+          Coverage Deal Audit · 0 deals
+        </summary>
+
+        <div class="empty-state">
+          No OUT coverage deals were
+          closed inside this week.
+        </div>
+
+      </details>
+    `;
   }
 
-  return rows.map((row, index) => `
-    <tr>
-      <td>#${index + 1}</td>
-      <td><strong>${escapeHTML(row.login)}</strong></td>
-      ${includeBranch ? `<td>${escapeHTML((row.branches || []).map(x => x.toUpperCase()).join(', '))}</td>` : ''}
-      <td class="${type === 'winner' ? 'tag-winner' : 'tag-loser'}">${formatCurrency(row.client)}</td>
-      <td class="${row.coverage >= 0 ? 'net-positive' : 'net-negative'}">${formatCurrency(row.coverage)}</td>
-      <td class="${row.brokerNet >= 0 ? 'net-positive' : 'net-negative'}">${formatCurrency(row.brokerNet)}</td>
-      <td>${row.occurrences}</td>
-    </tr>`).join('');
+  const body =
+    rows.map(row => `
+      <tr>
+
+        <td>
+          ${escapeHTML(
+            row.accountId
+          )}
+        </td>
+
+        <td>
+          ${escapeHTML(
+            row.dealId
+          )}
+        </td>
+
+        <td>
+          ${escapeHTML(
+            row.time
+          )}
+        </td>
+
+        <td>
+          ${escapeHTML(
+            row.symbol
+          )}
+        </td>
+
+        <td>
+          ${escapeHTML(
+            String(
+              row.volume
+            )
+          )}
+        </td>
+
+        <td class="${
+          row.profit >= 0
+            ? 'net-positive'
+            : 'net-negative'
+        }">
+          ${formatCurrency(
+            row.profit
+          )}
+        </td>
+
+        <td>
+          ${
+            row.login
+              ? `
+                <strong>
+                  ${escapeHTML(
+                    row.login
+                  )}
+                </strong>
+              `
+              : `
+                <span class="warning-text">
+                  UNMATCHED
+                </span>
+              `
+          }
+        </td>
+
+        <td>
+          ${escapeHTML(
+            row.matchMethod || ''
+          )}
+        </td>
+
+      </tr>
+    `).join('');
+
+  return `
+    <details class="audit-panel">
+
+      <summary>
+        Coverage Deal Audit ·
+        ${rows.length}
+        weekly OUT deals
+      </summary>
+
+      <div class="table-scroll tall-scroll">
+
+        <table class="matrix-table compact-table">
+
+          <thead>
+            <tr>
+              <th>COVER ACCT</th>
+              <th>DEAL</th>
+              <th>TIME</th>
+              <th>SYMBOL</th>
+              <th>VOL</th>
+              <th>PROFIT</th>
+              <th>CLIENT LOGIN</th>
+              <th>MATCH</th>
+            </tr>
+          </thead>
+
+          <tbody>
+            ${body}
+          </tbody>
+
+        </table>
+
+      </div>
+
+    </details>
+  `;
 }
 
 // ============================================================================
-// ARCHIVE
+// SAVE WEEK
 // ============================================================================
 
-function extractWeekShiftData(sourceStore, dateKeys) {
-  const result = {};
-  allBranches.forEach(branch => {
-    dateKeys.forEach(date => {
-      const day = sourceStore?.[branch]?.[date];
-      if (!day) return;
-      if (!result[branch]) result[branch] = {};
-      result[branch][date] = deepClone(day);
+async function saveWeeklyImport() {
+  if (!pendingImport) {
+    showToast(
+      'Analyze the files first.',
+      'error'
+    );
+
+    return;
+  }
+
+  if (
+    pendingImport.branch !==
+    currentBranch
+  ) {
+    showToast(
+      'Branch changed. Analyze the files again.',
+      'error'
+    );
+
+    return;
+  }
+
+  const existingSnapshot =
+    await db.ref(
+      `pl_weekly_store/${currentBranch}/${pendingImport.weekKey}`
+    ).once('value');
+
+  const existing =
+    existingSnapshot.val();
+
+  if (existing) {
+    const replace =
+      confirm(
+        `${currentBranch.toUpperCase()} already has a saved report for ${pendingImport.weekLabel}.\n\n` +
+        `Saving will REPLACE that branch/week with the newly analyzed files.\n\nContinue?`
+      );
+
+    if (!replace) return;
+  }
+
+  if (
+    pendingImport
+      .unmatchedDeals
+      .length
+  ) {
+    const proceed =
+      confirm(
+        `${pendingImport.unmatchedDeals.length} coverage closing deal(s) are unmatched.\n\n` +
+        `They will be saved for audit but excluded from matched Coverage P/L. You can re-import this same week later with a longer history.\n\nContinue?`
+      );
+
+    if (!proceed) return;
+  }
+
+  const saveButton =
+    document.getElementById(
+      'save-week-import-btn'
+    );
+
+  if (saveButton) {
+    saveButton.disabled =
+      true;
+
+    saveButton.textContent =
+      'Saving…';
+  }
+
+  const matchedDealMap = {};
+
+  pendingImport
+    .matchedDeals
+    .forEach(row => {
+      matchedDealMap[
+        firebaseSafeKey(
+          row.recordKey
+        )
+      ] = row;
     });
-  });
-  return result;
-}
 
-async function archiveAndResetWeek() {
-  const dateKeys = getWeekDateKeys();
-  const snapshot = extractWeekShiftData(shiftStore, dateKeys);
+  const unmatchedDealMap = {};
 
-  let shiftCount = 0;
-  allBranches.forEach(branch => {
-    dateKeys.forEach(date => {
-      shiftCount += SHIFT_ORDER.filter(shift => snapshot?.[branch]?.[date]?.[shift]).length;
+  pendingImport
+    .unmatchedDeals
+    .forEach(row => {
+      unmatchedDealMap[
+        firebaseSafeKey(
+          row.recordKey
+        )
+      ] = row;
     });
-  });
 
-  const weekLabel = getWeekLabel();
-  const confirmed = confirm(
-    `Archive trading week ${weekLabel}?\n\n` +
-    `${shiftCount} saved ON / AM / PM shift reports will be archived.\n\n` +
-    `The persistent cover-position/client mapping will NOT be deleted.\n\nContinue?`
-  );
-  if (!confirmed) return;
+  const record = {
+    version: 3,
+    branch:
+      currentBranch,
 
-  const archiveKey = Date.now().toString();
-  const { monday, friday } = getWeekBounds();
-  const archivePayload = {
-    archivedAt: new Date().toISOString(),
-    weekLabel,
-    weekStart: isoDateOnly(monday),
-    weekEnd: isoDateOnly(friday),
-    shiftData: snapshot
+    weekKey:
+      pendingImport.weekKey,
+
+    weekStart:
+      pendingImport.weekStart,
+
+    weekEnd:
+      pendingImport.weekEnd,
+
+    weekLabel:
+      pendingImport.weekLabel,
+
+    savedAt:
+      new Date()
+        .toISOString(),
+
+    source: {
+      summaryFile:
+        pendingImport
+          .summaryFileName,
+
+      coverageFiles:
+        pendingImport
+          .coverageFileNames
+    },
+
+    summary: {
+      rawRows:
+        pendingImport
+          .summaryRawRows,
+
+      clientCount:
+        pendingImport
+          .summaryClientCount
+    },
+
+    stats:
+      pendingImport.stats,
+
+    accounts:
+      pendingImport.accounts,
+
+    coverageByLogin:
+      pendingImport.coverageByLogin,
+
+    matchedDeals:
+      matchedDealMap,
+
+    unmatchedDeals:
+      unmatchedDealMap
   };
 
   const updates = {};
-  updates[`pl_history/${archiveKey}`] = archivePayload;
-  allBranches.forEach(branch => {
-    dateKeys.forEach(date => {
-      if (shiftStore?.[branch]?.[date]) updates[`pl_shift_store/${branch}/${date}`] = null;
-    });
-  });
+
+  updates[
+    `pl_weekly_store/${currentBranch}/${pendingImport.weekKey}`
+  ] = record;
+
+  Object.entries(
+    pendingImport
+      .mappingUpdates || {}
+  ).forEach(
+    ([accountKey, positions]) => {
+      Object.entries(
+        positions || {}
+      ).forEach(
+        ([positionKey, login]) => {
+          updates[
+            `pl_cover_position_map/${currentBranch}/${accountKey}/${positionKey}`
+          ] = login;
+        }
+      );
+    }
+  );
 
   try {
-    await db.ref().update(updates);
-    showToast('Week archived successfully. New week is ready.');
-  } catch (err) {
-    console.error('Archive failed:', err);
-    showToast('Archive failed. No shift data was cleared.', 'error');
+    await db.ref()
+      .update(updates);
+
+    selectedBranchWeekKey =
+      pendingImport.weekKey;
+
+    showToast(
+      `${currentBranch.toUpperCase()} ${pendingImport.weekLabel} saved successfully.`
+    );
+
+    setImportStatus(
+      `Saved ${pendingImport.weekLabel}. This record now feeds Group 5 automatically.`,
+      'success'
+    );
+
+    clearFileInputs();
+  }
+
+  catch (err) {
+    console.error(
+      'Weekly save failed:',
+      err
+    );
+
+    showToast(
+      'Save failed. No weekly record was changed.',
+      'error'
+    );
+
+    setImportStatus(
+      'Save failed. Check Firebase access and try again.',
+      'error'
+    );
+  }
+
+  finally {
+    if (saveButton) {
+      saveButton.disabled =
+        false;
+
+      saveButton.textContent =
+        'Save Week';
+    }
   }
 }
 
-function formatArchiveDate(value) {
-  const d = new Date(value);
-  return `${d.toLocaleDateString('en-US', { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' })} · ${d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}`;
+function clearFileInputs() {
+  const summary =
+    document.getElementById(
+      'summary-file'
+    );
+
+  const coverage =
+    document.getElementById(
+      'coverage-files'
+    );
+
+  if (summary) {
+    summary.value = '';
+  }
+
+  if (coverage) {
+    coverage.value = '';
+  }
 }
 
-function renderArchiveView() {
-  const list = document.getElementById('archive-week-list');
-  const detail = document.getElementById('archive-detail-container');
-  if (!list || !detail) return;
+function resetImportUI(
+  clearFiles = true
+) {
+  pendingImport = null;
 
-  const keys = Object.keys(archiveStore).sort((a, b) => Number(b) - Number(a));
-  if (!keys.length) {
-    list.innerHTML = '<p class="subtitle" style="padding:10px;">No archived weeks yet.</p>';
-    detail.innerHTML = '';
-    selectedArchiveWeek = null;
+  if (clearFiles) {
+    clearFileInputs();
+  }
+
+  const preview =
+    document.getElementById(
+      'import-preview'
+    );
+
+  if (preview) {
+    preview.innerHTML = '';
+  }
+
+  const saveButton =
+    document.getElementById(
+      'save-week-import-btn'
+    );
+
+  if (saveButton) {
+    saveButton.disabled =
+      true;
+  }
+
+  setImportStatus(
+    'Upload the weekly Summary and Coverage History.',
+    'neutral'
+  );
+
+  renderExistingWeekStatus();
+}
+
+function renderExistingWeekStatus() {
+  const el =
+    document.getElementById(
+      'existing-week-status'
+    );
+
+  if (!el) return;
+
+  if (pendingImport) {
+    const existing =
+      weeklyStore?.[
+        currentBranch
+      ]?.[
+        pendingImport.weekKey
+      ];
+
+    el.innerHTML =
+      existing
+
+        ? `
+          <span class="status-badge check">
+            RE-IMPORT
+          </span>
+
+          <strong>
+            ${escapeHTML(
+              pendingImport.weekLabel
+            )}
+          </strong>
+
+          <small>
+            Existing saved week will be replaced
+            only after confirmation.
+          </small>
+        `
+
+        : `
+          <span class="status-badge good">
+            NEW WEEK
+          </span>
+
+          <strong>
+            ${escapeHTML(
+              pendingImport.weekLabel
+            )}
+          </strong>
+
+          <small>
+            Ready to save after analysis.
+          </small>
+        `;
+
     return;
   }
 
-  if (!selectedArchiveWeek || !archiveStore[selectedArchiveWeek]) selectedArchiveWeek = keys[0];
+  const records =
+    Object.values(
+      weeklyStore?.[
+        currentBranch
+      ] || {}
+    )
+      .sort(
+        (a, b) =>
+          String(
+            b.weekStart || ''
+          ).localeCompare(
+            String(
+              a.weekStart || ''
+            )
+          )
+      );
 
-  list.innerHTML = keys.map(key => {
-    const entry = archiveStore[key];
-    const label = entry.weekLabel || formatArchiveDate(entry.archivedAt || Number(key));
-    return `<button class="archive-week-btn ${key === selectedArchiveWeek ? 'active' : ''}" onclick="selectArchiveWeek('${key}')">${escapeHTML(label)}</button>`;
-  }).join('');
+  if (!records.length) {
+    el.innerHTML = `
+      <span class="status-badge neutral">
+        NO DATA
+      </span>
 
-  renderArchiveDetail(selectedArchiveWeek);
+      <small>
+        No weekly reports saved yet.
+      </small>
+    `;
+
+    return;
+  }
+
+  const latest =
+    records[0];
+
+  el.innerHTML = `
+    <span class="status-badge good">
+      LATEST SAVED
+    </span>
+
+    <strong>
+      ${escapeHTML(
+        latest.weekLabel || ''
+      )}
+    </strong>
+
+    <small>
+      ${escapeHTML(
+        formatSavedAt(
+          latest.savedAt
+        )
+      )}
+    </small>
+  `;
 }
 
-function selectArchiveWeek(key) {
-  selectedArchiveWeek = key;
+// ============================================================================
+// BRANCH SAVED-WEEK LEDGER + DETAIL
+// ============================================================================
+
+function getBranchRecords(branch) {
+  return Object.entries(
+    weeklyStore?.[
+      branch
+    ] || {}
+  )
+    .map(
+      ([key, record]) => ({
+        key,
+        ...record
+      })
+    )
+    .sort(
+      (a, b) =>
+        String(
+          b.weekStart || ''
+        ).localeCompare(
+          String(
+            a.weekStart || ''
+          )
+        )
+    );
+}
+
+function renderBranchWeekLedger() {
+  const container =
+    document.getElementById(
+      'branch-week-ledger'
+    );
+
+  if (!container) return;
+
+  const records =
+    getBranchRecords(
+      currentBranch
+    );
+
+  if (!records.length) {
+    container.innerHTML = `
+      <div class="empty-state">
+
+        <strong>
+          No weekly reports saved.
+        </strong>
+
+        Your first Friday import will appear
+        here permanently.
+
+      </div>
+    `;
+
+    const detail =
+      document.getElementById(
+        'branch-week-detail'
+      );
+
+    if (detail) {
+      detail.innerHTML = '';
+    }
+
+    return;
+  }
+
+  if (
+    !selectedBranchWeekKey ||
+    !weeklyStore?.[
+      currentBranch
+    ]?.[
+      selectedBranchWeekKey
+    ]
+  ) {
+    selectedBranchWeekKey =
+      records[0].key;
+  }
+
+  container.innerHTML = `
+    <div class="table-card">
+
+      <div class="table-scroll">
+
+        <table class="matrix-table ledger-table">
+
+          <thead>
+            <tr>
+              <th>WEEK</th>
+              <th>STATUS</th>
+              <th>ACCOUNTS</th>
+              <th>CLIENT P/L</th>
+              <th>COVER PROFIT</th>
+              <th>BROKER NET</th>
+              <th>UNMATCHED</th>
+              <th>SAVED</th>
+              <th></th>
+            </tr>
+          </thead>
+
+          <tbody>
+
+            ${
+              records.map(
+                record => {
+                  const stats =
+                    record.stats || {};
+
+                  const needsCheck =
+                    Number(
+                      stats
+                        .unmatchedCoverDeals ||
+                      0
+                    ) > 0;
+
+                  return `
+                    <tr class="${
+                      record.key ===
+                      selectedBranchWeekKey
+                        ? 'selected-row'
+                        : ''
+                    }">
+
+                      <td>
+                        <strong>
+                          ${escapeHTML(
+                            record.weekLabel ||
+                            record.key
+                          )}
+                        </strong>
+                      </td>
+
+                      <td>
+                        <span class="status-badge ${
+                          needsCheck
+                            ? 'check'
+                            : 'good'
+                        }">
+                          ${
+                            needsCheck
+                              ? 'CHECK'
+                              : 'COMPLETE'
+                          }
+                        </span>
+                      </td>
+
+                      <td>
+                        ${
+                          Number(
+                            stats.accountCount ||
+                            Object.keys(
+                              record.accounts ||
+                              {}
+                            ).length
+                          )
+                        }
+                      </td>
+
+                      <td class="${
+                        Number(
+                          stats.clientTotal ||
+                          0
+                        ) >= 0
+                          ? 'tag-winner'
+                          : 'tag-loser'
+                      }">
+                        ${formatCurrency(
+                          stats.clientTotal ||
+                          0
+                        )}
+                      </td>
+
+                      <td class="${
+                        Number(
+                          stats.coverageTotal ||
+                          0
+                        ) >= 0
+                          ? 'net-positive'
+                          : 'net-negative'
+                      }">
+                        ${formatCurrency(
+                          stats.coverageTotal ||
+                          0
+                        )}
+                      </td>
+
+                      <td class="${
+                        Number(
+                          stats.brokerTotal ||
+                          0
+                        ) >= 0
+                          ? 'net-positive'
+                          : 'net-negative'
+                      }">
+                        ${formatCurrency(
+                          stats.brokerTotal ||
+                          0
+                        )}
+                      </td>
+
+                      <td>
+                        ${
+                          Number(
+                            stats
+                              .unmatchedCoverDeals ||
+                            0
+                          )
+                        }
+                      </td>
+
+                      <td>
+                        ${escapeHTML(
+                          formatSavedAt(
+                            record.savedAt
+                          )
+                        )}
+                      </td>
+
+                      <td>
+                        <button
+                          class="mini-btn"
+                          onclick="viewBranchWeek('${escapeHTML(
+                            record.key
+                          )}')"
+                        >
+                          View
+                        </button>
+                      </td>
+
+                    </tr>
+                  `;
+                }
+              ).join('')
+            }
+
+          </tbody>
+
+        </table>
+
+      </div>
+
+    </div>
+  `;
+
+  renderBranchWeekDetail(
+    selectedBranchWeekKey
+  );
+}
+
+function viewBranchWeek(
+  weekKey
+) {
+  selectedBranchWeekKey =
+    weekKey;
+
+  renderBranchWeekLedger();
+
+  const detail =
+    document.getElementById(
+      'branch-week-detail'
+    );
+
+  if (detail) {
+    detail.scrollIntoView({
+      behavior: 'smooth',
+      block: 'start'
+    });
+  }
+}
+
+function objectValues(obj) {
+  return Object.values(
+    obj || {}
+  );
+}
+
+function renderBranchWeekDetail(
+  weekKey
+) {
+  const container =
+    document.getElementById(
+      'branch-week-detail'
+    );
+
+  const record =
+    weeklyStore?.[
+      currentBranch
+    ]?.[
+      weekKey
+    ];
+
+  if (
+    !container ||
+    !record
+  ) {
+    if (container) {
+      container.innerHTML = '';
+    }
+
+    return;
+  }
+
+  const rows =
+    objectValues(
+      record.accounts
+    );
+
+  const ranked =
+    rankEntries(
+      rows,
+      5
+    );
+
+  const matchedDeals =
+    objectValues(
+      record.matchedDeals
+    );
+
+  const unmatchedDeals =
+    objectValues(
+      record.unmatchedDeals
+    );
+
+  const stats =
+    record.stats || {};
+
+  container.innerHTML = `
+    <section class="saved-detail">
+
+      <div class="section-heading">
+
+        <div>
+
+          <div class="eyebrow">
+            SAVED WEEK ·
+            ${escapeHTML(
+              currentBranch.toUpperCase()
+            )}
+          </div>
+
+          <h2>
+            ${escapeHTML(
+              record.weekLabel ||
+              weekKey
+            )}
+          </h2>
+
+        </div>
+
+        <div class="section-note">
+          Saved
+          ${escapeHTML(
+            formatSavedAt(
+              record.savedAt
+            )
+          )}
+        </div>
+
+      </div>
+
+      <div class="import-summary-grid saved-stats">
+
+        <div class="import-stat">
+          <span>ACCOUNTS</span>
+          <strong>
+            ${Number(
+              stats.accountCount ||
+              rows.length
+            )}
+          </strong>
+        </div>
+
+        <div class="import-stat">
+          <span>CLIENT P/L</span>
+          <strong class="${
+            Number(
+              stats.clientTotal ||
+              0
+            ) >= 0
+              ? 'net-positive'
+              : 'net-negative'
+          }">
+            ${formatCurrency(
+              stats.clientTotal ||
+              0
+            )}
+          </strong>
+        </div>
+
+        <div class="import-stat">
+          <span>COVER PROFIT</span>
+          <strong class="${
+            Number(
+              stats.coverageTotal ||
+              0
+            ) >= 0
+              ? 'net-positive'
+              : 'net-negative'
+          }">
+            ${formatCurrency(
+              stats.coverageTotal ||
+              0
+            )}
+          </strong>
+        </div>
+
+        <div class="import-stat">
+          <span>BROKER NET</span>
+          <strong class="${
+            Number(
+              stats.brokerTotal ||
+              0
+            ) >= 0
+              ? 'net-positive'
+              : 'net-negative'
+          }">
+            ${formatCurrency(
+              stats.brokerTotal ||
+              0
+            )}
+          </strong>
+        </div>
+
+        <div class="import-stat">
+          <span>MATCHED COVER</span>
+          <strong>
+            ${Number(
+              stats
+                .matchedCoverDeals ||
+              matchedDeals.length
+            )}
+          </strong>
+        </div>
+
+        <div class="import-stat">
+          <span>UNMATCHED COVER</span>
+          <strong class="${
+            Number(
+              stats
+                .unmatchedCoverDeals ||
+              unmatchedDeals.length
+            )
+              ? 'warning-text'
+              : ''
+          }">
+            ${Number(
+              stats
+                .unmatchedCoverDeals ||
+              unmatchedDeals.length
+            )}
+          </strong>
+        </div>
+
+      </div>
+
+      <div class="preview-grid">
+
+        ${
+          rankingCard(
+            'Top 5 Winners',
+            ranked.winners,
+            'winner',
+            false
+          )
+        }
+
+        ${
+          rankingCard(
+            'Top 5 Losers',
+            ranked.losers,
+            'loser',
+            false
+          )
+        }
+
+      </div>
+
+      ${
+        unmatchedDeals.length
+          ? renderUnmatchedDeals(
+              unmatchedDeals
+            )
+          : ''
+      }
+
+      ${
+        renderAccountsSection(
+          record.accounts,
+          'All Saved Accounts',
+          'saved'
+        )
+      }
+
+      ${
+        renderCoverageAuditSection(
+          matchedDeals,
+          unmatchedDeals
+        )
+      }
+
+    </section>
+  `;
+}
+
+// ============================================================================
+// GROUP 5 WEEK CATALOG + CALCULATIONS
+// ============================================================================
+
+function getWeekCatalog() {
+  const map = {};
+
+  allBranches.forEach(
+    branch => {
+      Object.entries(
+        weeklyStore?.[
+          branch
+        ] || {}
+      ).forEach(
+        ([weekKey, record]) => {
+          if (!map[weekKey]) {
+            map[weekKey] = {
+              weekKey,
+
+              weekStart:
+                record.weekStart ||
+                weekKey.split('_')[0] ||
+                '',
+
+              weekEnd:
+                record.weekEnd ||
+                weekKey.split('_')[1] ||
+                '',
+
+              weekLabel:
+                record.weekLabel ||
+                weekKey,
+
+              branches: []
+            };
+          }
+
+          map[
+            weekKey
+          ].branches.push(
+            branch
+          );
+        }
+      );
+    }
+  );
+
+  return Object.values(
+    map
+  ).sort(
+    (a, b) =>
+      String(
+        b.weekStart
+      ).localeCompare(
+        String(
+          a.weekStart
+        )
+      )
+  );
+}
+
+function selectExecutiveWeek(
+  weekKey
+) {
+  selectedExecutiveWeekKey =
+    weekKey;
+
+  renderManagementView();
+}
+
+function computeBranchWeek(
+  branch,
+  weekKey
+) {
+  const record =
+    weeklyStore?.[
+      branch
+    ]?.[
+      weekKey
+    ];
+
+  const entries =
+    objectValues(
+      record?.accounts
+    );
+
+  return {
+    record,
+    entries,
+    ...rankEntries(
+      entries,
+      5
+    )
+  };
+}
+
+function computeCombinedWeek(
+  weekKey
+) {
+  const combined = {};
+
+  allBranches.forEach(
+    branch => {
+      const record =
+        weeklyStore?.[
+          branch
+        ]?.[
+          weekKey
+        ];
+
+      if (!record?.accounts) {
+        return;
+      }
+
+      objectValues(
+        record.accounts
+      ).forEach(row => {
+        if (
+          !combined[
+            row.login
+          ]
+        ) {
+          combined[
+            row.login
+          ] = {
+            login:
+              row.login,
+
+            name:
+              row.name ||
+              '',
+
+            client: 0,
+            coverage: 0,
+            brokerNet: 0,
+            branches: []
+          };
+        }
+
+        const target =
+          combined[
+            row.login
+          ];
+
+        target.client =
+          roundMoney(
+            target.client +
+            Number(
+              row.client ||
+              0
+            )
+          );
+
+        target.coverage =
+          roundMoney(
+            target.coverage +
+            Number(
+              row.coverage ||
+              0
+            )
+          );
+
+        if (
+          !target.name &&
+          row.name
+        ) {
+          target.name =
+            row.name;
+        }
+
+        if (
+          !target.branches
+            .includes(branch)
+        ) {
+          target.branches
+            .push(branch);
+        }
+      });
+    }
+  );
+
+  const entries =
+    Object.values(
+      combined
+    ).map(row => ({
+      ...row,
+
+      brokerNet:
+        brokerNet(
+          row.client,
+          row.coverage
+        ),
+
+      branches:
+        row.branches.sort()
+    }));
+
+  return {
+    entries,
+    ...rankEntries(
+      entries,
+      5
+    )
+  };
+}
+
+function renderManagementView() {
+  const catalog =
+    getWeekCatalog();
+
+  const select =
+    document.getElementById(
+      'executive-week-select'
+    );
+
+  if (!catalog.length) {
+    selectedExecutiveWeekKey =
+      null;
+
+    if (select) {
+      select.innerHTML =
+        '<option value="">No saved weeks</option>';
+    }
+
+    const combined =
+      document.getElementById(
+        'combined-tables-container'
+      );
+
+    const branches =
+      document.getElementById(
+        'management-tables-container'
+      );
+
+    if (combined) {
+      combined.innerHTML = `
+        <div class="empty-state wide">
+          <strong>
+            No weekly imports yet.
+          </strong>
+          Saved branch weeks will automatically
+          appear here.
+        </div>
+      `;
+    }
+
+    if (branches) {
+      branches.innerHTML = '';
+    }
+
+    renderExecutiveSourceStatus(
+      null
+    );
+
+    const note =
+      document.getElementById(
+        'executive-week-note'
+      );
+
+    if (note) {
+      note.textContent = '';
+    }
+
+    return;
+  }
+
+  if (
+    !selectedExecutiveWeekKey ||
+    !catalog.some(
+      item =>
+        item.weekKey ===
+        selectedExecutiveWeekKey
+    )
+  ) {
+    selectedExecutiveWeekKey =
+      catalog[0].weekKey;
+  }
+
+  if (select) {
+    select.innerHTML =
+      catalog.map(
+        item => `
+          <option
+            value="${escapeHTML(
+              item.weekKey
+            )}"
+            ${
+              item.weekKey ===
+              selectedExecutiveWeekKey
+                ? 'selected'
+                : ''
+            }
+          >
+            ${escapeHTML(
+              item.weekLabel
+            )}
+          </option>
+        `
+      ).join('');
+  }
+
+  const selectedMeta =
+    catalog.find(
+      item =>
+        item.weekKey ===
+        selectedExecutiveWeekKey
+    );
+
+  const note =
+    document.getElementById(
+      'executive-week-note'
+    );
+
+  if (note) {
+    note.textContent =
+      selectedMeta?.weekLabel ||
+      '';
+  }
+
+  const combinedResult =
+    computeCombinedWeek(
+      selectedExecutiveWeekKey
+    );
+
+  const combinedContainer =
+    document.getElementById(
+      'combined-tables-container'
+    );
+
+  if (combinedContainer) {
+    combinedContainer.innerHTML =
+      rankingCard(
+        'Top 5 Winners',
+        combinedResult.winners,
+        'winner',
+        true
+      ) +
+      rankingCard(
+        'Top 5 Losers',
+        combinedResult.losers,
+        'loser',
+        true
+      );
+  }
+
+  const branchContainer =
+    document.getElementById(
+      'management-tables-container'
+    );
+
+  if (branchContainer) {
+    branchContainer.innerHTML =
+      allBranches.map(
+        branch => {
+          const result =
+            computeBranchWeek(
+              branch,
+              selectedExecutiveWeekKey
+            );
+
+          if (!result.record) {
+            return `
+              <div class="branch-pair-block">
+
+                <div class="branch-pair-title">
+
+                  <strong>
+                    ${escapeHTML(
+                      branch.toUpperCase()
+                    )}
+                  </strong>
+
+                  <span class="status-badge neutral">
+                    NOT IMPORTED
+                  </span>
+
+                </div>
+
+                <div class="empty-state compact">
+                  No report saved for this week.
+                </div>
+
+              </div>
+            `;
+          }
+
+          return `
+            <div class="branch-pair-block">
+
+              <div class="branch-pair-title">
+
+                <strong>
+                  ${escapeHTML(
+                    branch.toUpperCase()
+                  )}
+                </strong>
+
+                <span class="status-badge ${
+                  Number(
+                    result.record
+                      .stats
+                      ?.unmatchedCoverDeals ||
+                    0
+                  )
+                    ? 'check'
+                    : 'good'
+                }">
+
+                  ${
+                    Number(
+                      result.record
+                        .stats
+                        ?.unmatchedCoverDeals ||
+                      0
+                    )
+                      ? 'CHECK'
+                      : 'COMPLETE'
+                  }
+
+                </span>
+
+              </div>
+
+              <div class="dashboard-grid executive-pair">
+
+                ${
+                  rankingCard(
+                    'Top 5 Winners',
+                    result.winners,
+                    'winner',
+                    false
+                  )
+                }
+
+                ${
+                  rankingCard(
+                    'Top 5 Losers',
+                    result.losers,
+                    'loser',
+                    false
+                  )
+                }
+
+              </div>
+
+            </div>
+          `;
+        }
+      ).join('');
+  }
+
+  renderExecutiveSourceStatus(
+    selectedExecutiveWeekKey
+  );
+}
+
+function renderExecutiveSourceStatus(
+  weekKey
+) {
+  const note =
+    document.getElementById(
+      'executive-source-status'
+    );
+
+  if (!note) return;
+
+  if (!weekKey) {
+    note.innerHTML = `
+      <span class="status-dot neutral"></span>
+      No weekly branch reports saved yet.
+    `;
+
+    return;
+  }
+
+  let branchesSaved = 0;
+  let totalAccounts = 0;
+  let unmatched = 0;
+  let clientTotal = 0;
+  let coverageTotal = 0;
+
+  allBranches.forEach(
+    branch => {
+      const record =
+        weeklyStore?.[
+          branch
+        ]?.[
+          weekKey
+        ];
+
+      if (!record) return;
+
+      branchesSaved += 1;
+
+      totalAccounts +=
+        Number(
+          record.stats
+            ?.accountCount ||
+          Object.keys(
+            record.accounts ||
+            {}
+          ).length
+        );
+
+      unmatched +=
+        Number(
+          record.stats
+            ?.unmatchedCoverDeals ||
+          0
+        );
+
+      clientTotal +=
+        Number(
+          record.stats
+            ?.clientTotal ||
+          0
+        );
+
+      coverageTotal +=
+        Number(
+          record.stats
+            ?.coverageTotal ||
+          0
+        );
+    }
+  );
+
+  note.innerHTML = `
+    <span class="status-dot ${
+      branchesSaved
+        ? 'good'
+        : 'neutral'
+    }"></span>
+
+    <strong>
+      ${branchesSaved}/${allBranches.length}
+    </strong>
+    branches saved ·
+
+    <strong>
+      ${totalAccounts.toLocaleString(
+        'en-US'
+      )}
+    </strong>
+    account rows ·
+
+    Client P/L
+
+    <strong class="${
+      clientTotal >= 0
+        ? 'net-positive'
+        : 'net-negative'
+    }">
+      ${formatCurrency(
+        clientTotal
+      )}
+    </strong>
+
+    · Cover
+
+    <strong class="${
+      coverageTotal >= 0
+        ? 'net-positive'
+        : 'net-negative'
+    }">
+      ${formatCurrency(
+        coverageTotal
+      )}
+    </strong>
+
+    ${
+      unmatched
+        ? `
+          <span class="status-separator">
+            ·
+          </span>
+
+          <span class="warning-text">
+            ${unmatched}
+            unmatched cover deal(s)
+          </span>
+        `
+        : ''
+    }
+  `;
+}
+
+function rankingCard(
+  title,
+  rows,
+  type,
+  includeBranch
+) {
+  return `
+    <div class="branch-card">
+
+      <h3>
+        ${escapeHTML(title)}
+      </h3>
+
+      <div class="table-scroll">
+
+        <table class="matrix-table ranking-table">
+
+          <thead>
+            <tr>
+              <th>RANK</th>
+              <th>LOGIN</th>
+              <th>NAME</th>
+
+              ${
+                includeBranch
+                  ? '<th>BRANCH</th>'
+                  : ''
+              }
+
+              <th>CLIENT P/L</th>
+              <th>COVER PROFIT</th>
+              <th>BROKER NET</th>
+            </tr>
+          </thead>
+
+          <tbody>
+            ${
+              renderRankingRows(
+                rows,
+                type,
+                includeBranch
+              )
+            }
+          </tbody>
+
+        </table>
+
+      </div>
+
+    </div>
+  `;
+}
+
+function renderRankingRows(
+  rows,
+  type,
+  includeBranch
+) {
+  if (!rows?.length) {
+    return `
+      <tr>
+        <td
+          colspan="${
+            includeBranch
+              ? 7
+              : 6
+          }"
+          class="empty-cell"
+        >
+          No qualifying accounts
+        </td>
+      </tr>
+    `;
+  }
+
+  return rows.map(
+    (row, index) => `
+      <tr>
+
+        <td>
+          #${index + 1}
+        </td>
+
+        <td>
+          <strong>
+            ${escapeHTML(
+              row.login
+            )}
+          </strong>
+        </td>
+
+        <td>
+          ${escapeHTML(
+            row.name || '—'
+          )}
+        </td>
+
+        ${
+          includeBranch
+            ? `
+              <td>
+                ${escapeHTML(
+                  (
+                    row.branches ||
+                    []
+                  )
+                    .map(
+                      x =>
+                        x.toUpperCase()
+                    )
+                    .join(', ')
+                )}
+              </td>
+            `
+            : ''
+        }
+
+        <td class="${
+          type === 'winner'
+            ? 'tag-winner'
+            : 'tag-loser'
+        }">
+          ${formatCurrency(
+            row.client
+          )}
+        </td>
+
+        <td class="${
+          Number(
+            row.coverage ||
+            0
+          ) >= 0
+            ? 'net-positive'
+            : 'net-negative'
+        }">
+          ${formatCurrency(
+            row.coverage ||
+            0
+          )}
+        </td>
+
+        <td class="${
+          Number(
+            row.brokerNet ||
+            0
+          ) >= 0
+            ? 'net-positive'
+            : 'net-negative'
+        }">
+          ${formatCurrency(
+            row.brokerNet ||
+            0
+          )}
+        </td>
+
+      </tr>
+    `
+  ).join('');
+}
+
+// ============================================================================
+// WEEKLY ARCHIVE — BUILT DIRECTLY FROM PERMANENT WEEKLY STORE
+// ============================================================================
+
+function renderArchiveView() {
+  const list =
+    document.getElementById(
+      'archive-week-list'
+    );
+
+  const detail =
+    document.getElementById(
+      'archive-detail-container'
+    );
+
+  if (
+    !list ||
+    !detail
+  ) {
+    return;
+  }
+
+  const catalog =
+    getWeekCatalog();
+
+  if (!catalog.length) {
+    list.innerHTML = `
+      <p
+        class="subtitle"
+        style="padding:10px;"
+      >
+        No saved weeks yet.
+      </p>
+    `;
+
+    detail.innerHTML = '';
+
+    selectedArchiveWeekKey =
+      null;
+
+    return;
+  }
+
+  if (
+    !selectedArchiveWeekKey ||
+    !catalog.some(
+      item =>
+        item.weekKey ===
+        selectedArchiveWeekKey
+    )
+  ) {
+    selectedArchiveWeekKey =
+      catalog[0].weekKey;
+  }
+
+  list.innerHTML =
+    catalog.map(
+      item => `
+        <button
+          class="archive-week-btn ${
+            item.weekKey ===
+            selectedArchiveWeekKey
+              ? 'active'
+              : ''
+          }"
+          onclick="selectArchiveWeek('${escapeHTML(
+            item.weekKey
+          )}')"
+        >
+
+          <strong>
+            ${escapeHTML(
+              item.weekLabel
+            )}
+          </strong>
+
+          <span>
+            ${item.branches.length}/${allBranches.length}
+            branches
+          </span>
+
+        </button>
+      `
+    ).join('');
+
+  renderArchiveDetail(
+    selectedArchiveWeekKey
+  );
+}
+
+function selectArchiveWeek(
+  weekKey
+) {
+  selectedArchiveWeekKey =
+    weekKey;
+
   renderArchiveView();
 }
 
-function renderArchiveDetail(key) {
-  const container = document.getElementById('archive-detail-container');
-  const entry = archiveStore[key];
-  if (!container || !entry) return;
+function renderArchiveDetail(
+  weekKey
+) {
+  const container =
+    document.getElementById(
+      'archive-detail-container'
+    );
 
-  if (!entry.shiftData) {
+  if (!container) return;
+
+  const catalogItem =
+    getWeekCatalog()
+      .find(
+        item =>
+          item.weekKey ===
+          weekKey
+      );
+
+  if (!catalogItem) {
     container.innerHTML = `
       <div class="empty-state">
-        <strong>Legacy archive</strong>
-        This archived week was created before the ON / AM / PM import system and does not contain shift-level source data.
-      </div>`;
+        Week not found.
+      </div>
+    `;
+
     return;
   }
 
-  const source = entry.shiftData;
-  const dateKeys = entry.weekStart && entry.weekEnd
-    ? buildDateRange(entry.weekStart, entry.weekEnd)
-    : Object.values(source).flatMap(branch => Object.keys(branch || {})).filter((v, i, a) => a.indexOf(v) === i).sort();
+  const combined =
+    computeCombinedWeek(
+      weekKey
+    );
 
-  const combined = computeCombinedWeekly(source, dateKeys);
-  let html = `
+  const statusRows =
+    allBranches.map(
+      branch => {
+        const record =
+          weeklyStore?.[
+            branch
+          ]?.[
+            weekKey
+          ];
+
+        if (!record) {
+          return `
+            <tr>
+
+              <td>
+                <strong>
+                  ${escapeHTML(
+                    branch.toUpperCase()
+                  )}
+                </strong>
+              </td>
+
+              <td>
+                <span class="status-badge neutral">
+                  NOT IMPORTED
+                </span>
+              </td>
+
+              <td>—</td>
+              <td>—</td>
+              <td>—</td>
+              <td>—</td>
+              <td>—</td>
+
+            </tr>
+          `;
+        }
+
+        const stats =
+          record.stats || {};
+
+        const check =
+          Number(
+            stats
+              .unmatchedCoverDeals ||
+            0
+          ) > 0;
+
+        return `
+          <tr>
+
+            <td>
+              <strong>
+                ${escapeHTML(
+                  branch.toUpperCase()
+                )}
+              </strong>
+            </td>
+
+            <td>
+              <span class="status-badge ${
+                check
+                  ? 'check'
+                  : 'good'
+              }">
+                ${
+                  check
+                    ? 'CHECK'
+                    : 'COMPLETE'
+                }
+              </span>
+            </td>
+
+            <td>
+              ${Number(
+                stats.accountCount ||
+                Object.keys(
+                  record.accounts ||
+                  {}
+                ).length
+              )}
+            </td>
+
+            <td class="${
+              Number(
+                stats.clientTotal ||
+                0
+              ) >= 0
+                ? 'tag-winner'
+                : 'tag-loser'
+            }">
+              ${formatCurrency(
+                stats.clientTotal ||
+                0
+              )}
+            </td>
+
+            <td class="${
+              Number(
+                stats.coverageTotal ||
+                0
+              ) >= 0
+                ? 'net-positive'
+                : 'net-negative'
+            }">
+              ${formatCurrency(
+                stats.coverageTotal ||
+                0
+              )}
+            </td>
+
+            <td>
+              ${Number(
+                stats
+                  .unmatchedCoverDeals ||
+                0
+              )}
+            </td>
+
+            <td>
+              ${escapeHTML(
+                formatSavedAt(
+                  record.savedAt
+                )
+              )}
+            </td>
+
+          </tr>
+        `;
+      }
+    ).join('');
+
+  container.innerHTML = `
     <div class="section-heading">
-      <div><div class="eyebrow">ARCHIVED WEEK</div><h2>${escapeHTML(entry.weekLabel || '')}</h2></div>
-      <div class="section-note">Archived ${escapeHTML(formatArchiveDate(entry.archivedAt || Number(key)))}</div>
+
+      <div>
+
+        <div class="eyebrow">
+          SAVED TRADING WEEK
+        </div>
+
+        <h2>
+          ${escapeHTML(
+            catalogItem.weekLabel
+          )}
+        </h2>
+
+      </div>
+
+      <div class="section-note">
+        Permanent weekly record
+      </div>
+
     </div>
+
     <div class="dashboard-grid executive-pair">
-      ${rankingCard('Top 5 Winners', combined.winners, 'winner', true)}
-      ${rankingCard('Top 5 Losers', combined.losers, 'loser', true)}
+
+      ${
+        rankingCard(
+          'Top 5 Winners',
+          combined.winners,
+          'winner',
+          true
+        )
+      }
+
+      ${
+        rankingCard(
+          'Top 5 Losers',
+          combined.losers,
+          'loser',
+          true
+        )
+      }
+
     </div>
-    <div class="section-heading"><div><div class="eyebrow">BRANCH PERFORMANCE</div><h2>Top 5 by Branch</h2></div></div>
-    <div class="dashboard-grid">`;
 
-  allBranches.forEach(branch => {
-    const result = computeWeeklyBranch(branch, source, dateKeys);
-    html += rankingCard(`${branch.toUpperCase()} — Top 5 Winners`, result.winners, 'winner', false);
-    html += rankingCard(`${branch.toUpperCase()} — Top 5 Losers`, result.losers, 'loser', false);
-  });
+    <section class="section-block">
 
-  html += '</div>';
-  container.innerHTML = html;
-}
+      <div class="section-heading">
 
-function buildDateRange(startISO, endISO) {
-  const [sy, sm, sd] = startISO.split('-').map(Number);
-  const [ey, em, ed] = endISO.split('-').map(Number);
-  const start = new Date(sy, sm - 1, sd, 12);
-  const end = new Date(ey, em - 1, ed, 12);
-  const result = [];
-  for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) result.push(isoDateOnly(d));
-  return result;
+        <div>
+
+          <div class="eyebrow">
+            IMPORT COMPLETENESS
+          </div>
+
+          <h2>
+            Branch Status
+          </h2>
+
+        </div>
+
+      </div>
+
+      <div class="table-card">
+
+        <div class="table-scroll">
+
+          <table class="matrix-table">
+
+            <thead>
+              <tr>
+                <th>BRANCH</th>
+                <th>STATUS</th>
+                <th>ACCOUNTS</th>
+                <th>CLIENT P/L</th>
+                <th>COVER PROFIT</th>
+                <th>UNMATCHED</th>
+                <th>SAVED</th>
+              </tr>
+            </thead>
+
+            <tbody>
+              ${statusRows}
+            </tbody>
+
+          </table>
+
+        </div>
+
+      </div>
+
+    </section>
+
+    <section class="section-block">
+
+      <div class="section-heading">
+
+        <div>
+
+          <div class="eyebrow">
+            BRANCH PERFORMANCE
+          </div>
+
+          <h2>
+            Top 5 by Branch
+          </h2>
+
+        </div>
+
+      </div>
+
+      <div class="dashboard-grid archive-branch-grid">
+
+        ${
+          allBranches.map(
+            branch => {
+              const result =
+                computeBranchWeek(
+                  branch,
+                  weekKey
+                );
+
+              if (
+                !result.record
+              ) {
+                return '';
+              }
+
+              return `
+                <div class="branch-pair-block">
+
+                  <div class="branch-pair-title">
+
+                    <strong>
+                      ${escapeHTML(
+                        branch.toUpperCase()
+                      )}
+                    </strong>
+
+                  </div>
+
+                  <div class="dashboard-grid executive-pair">
+
+                    ${
+                      rankingCard(
+                        'Top 5 Winners',
+                        result.winners,
+                        'winner',
+                        false
+                      )
+                    }
+
+                    ${
+                      rankingCard(
+                        'Top 5 Losers',
+                        result.losers,
+                        'loser',
+                        false
+                      )
+                    }
+
+                  </div>
+
+                </div>
+              `;
+            }
+          ).join('')
+        }
+
+      </div>
+
+    </section>
+  `;
 }
 
 // ============================================================================
@@ -1496,19 +4576,41 @@ function buildDateRange(startISO, endISO) {
 // ============================================================================
 
 function initApp() {
-  updateWeekLabels();
-  selectImportShift('ON');
+  const urlParams =
+    new URLSearchParams(
+      window.location.search
+    );
 
-  const urlParams = new URLSearchParams(window.location.search);
-  const branchParam = (urlParams.get('branch') || 'group5').toLowerCase();
-  const allowedTabs = branchGroups[branchParam] || [branchParam];
+  const branchParam =
+    (
+      urlParams.get('branch') ||
+      'group5'
+    ).toLowerCase();
 
-  applySidebarLock(allowedTabs);
-  switchTab(branchParam);
+  const allowedTabs =
+    branchGroups[
+      branchParam
+    ] || [branchParam];
+
+  applySidebarLock(
+    allowedTabs
+  );
+
+  switchTab(
+    branchParam
+  );
 }
 
-if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', initApp);
-} else {
+if (
+  document.readyState ===
+  'loading'
+) {
+  document.addEventListener(
+    'DOMContentLoaded',
+    initApp
+  );
+}
+
+else {
   initApp();
 }
