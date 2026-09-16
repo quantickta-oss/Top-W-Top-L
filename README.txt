@@ -1,56 +1,109 @@
-P/L SYSTEM — DAILY IMPORT UPDATE
-================================
+P/L SYSTEM — WEEKLY IMPORT EDITION
+==================================
 
-FILES
------
-index.html
-styles.css
-app.js
+FINAL WORKFLOW
+--------------
+Do this once per branch every Friday after market close:
 
-IMPORTANT BEFORE DEPLOYING
---------------------------
-1. Copy your REAL Firebase apiKey/config into app.js.
-2. Upload all three files together.
-3. Test on a branch link before replacing production.
+1) Export MT5 Trades\Summary for Monday -> Friday.
+2) Export the Coverage Trade History. The coverage history may start before Monday.
+3) Open the branch page.
+4) Upload the weekly Summary.
+5) Upload one or more Coverage History HTML files.
+6) Click "Analyze Week".
+7) Review the detected week, totals, Top 5, all accounts and any unmatched cover deals.
+8) Click "Save Week".
 
-NEW SOURCE-OF-TRUTH WORKFLOW
-----------------------------
-1. Open the branch page.
-2. Upload the one-day MT5 Trades\\Summary HTML.
-3. Upload one or more Coverage History HTML files. The history can begin on an older date.
-4. Click Analyze Files.
-5. The app reads the report date automatically from the Summary header.
-6. The app reads the entire cover history for position/comment mapping.
-7. It counts ONLY coverage positions whose Close Time is on the detected Summary date.
-8. Coverage P/L uses ONLY the Profit field.
-9. If a closed position has no client login mapping, it appears in an Unmatched table for optional manual mapping.
-10. Save Daily Report. Re-importing the same branch/date REPLACES the day; it does not duplicate it.
+There is NO manual P/L typing and NO ON / AM / PM processing.
 
-WEEKLY TOP 5
-------------
-Group 5 now uses pl_daily_store, not the manual Top 3 shift matrix.
-It nets each login across Monday-Friday and then ranks the true weekly Top 5 Winners / Losers.
+PERMANENT CALCULATION RULES
+---------------------------
+CLIENT P/L
+- Source: MT5 Trades\Summary.
+- Field used: Profit.
+- Every login in the Summary is stored.
+- Winners = highest positive weekly Client P/L.
+- Losers = most negative weekly Client P/L.
 
-MANUAL TOP 3
-------------
-The ON / AM / PM manual table is still available for operations.
-Enter moves to the next field. Shift+Enter goes backward.
-This table does NOT drive the Executive Top 5.
+COVERAGE P/L
+- Source: MT5 Trade History -> Deals section.
+- Only Direction = OUT is counted.
+- Only deals whose Deal Time falls between the Summary's detected Monday and Friday are counted.
+- Amount used = Profit ONLY.
+- Commission, Fee and Swap are ignored.
+- Older rows outside the week are NEVER counted in weekly Coverage P/L.
+- Older rows are read only to recover client comments / position-to-login mapping.
 
-PERSISTENT COVER MAPPING
-------------------------
-The app stores cover position -> client login mappings under pl_cover_position_map.
-Archiving/resetting a week does NOT delete this mapping.
-This helps later closes whose original opening comment came from an earlier day/week.
+BROKER NET
+- Broker Net = Coverage P/L - Client P/L.
 
-SAMPLE VALIDATION WITH THE FILES PROVIDED
------------------------------------------
-Summary detected: 2026-09-10
-Summary client rows: 4,306
-Non-zero client P/L accounts: 605
-Coverage account detected: 5221
-Coverage positions closed on 2026-09-10: 66
-Coverage Profit counted: +1,278.45
-Unmatched closed positions in this sample: 0
+MATCHING
+--------
+The system uses this priority:
+1) Client login directly on the closing deal comment.
+2) Client login on the closing order comment.
+3) Match the OUT deal to the closed Position row, then recover the position's client login.
+4) Reuse the persistent position -> client login mapping saved in Firebase.
 
-This validation follows the requested rule: position Close Time = report date; Coverage P/L = Profit only.
+If a weekly OUT deal still cannot be matched:
+- The system DOES NOT guess.
+- It saves the deal as unmatched for audit.
+- The unmatched profit is excluded from matched Coverage P/L.
+- Re-import the same branch/week later with a longer Coverage History to replace the week.
+
+WEEK DETECTION
+--------------
+The Summary date range is detected automatically from the MT5 header.
+The importer requires a Monday -> Friday range.
+Example:
+from '2026.09.14' to '2026.09.18'
+
+No date needs to be changed in app.js each week.
+
+FIREBASE DATA
+-------------
+New permanent weekly records:
+pl_weekly_store/{branch}/{weekKey}
+
+Permanent cover mapping:
+pl_cover_position_map/{branch}/{coverAccount}/{positionId}
+
+The previous shift/manual data paths are not deleted by this update.
+The new weekly dashboard does not use them.
+
+There is no Archive & Reset action anymore.
+Each week is saved under its own week key, so a new Friday import automatically creates the next week.
+The Weekly Archive screen reads these permanent weekly records directly.
+
+RE-IMPORTS
+----------
+Re-importing the same branch + week replaces that weekly branch report after confirmation.
+It does not add the P/L a second time.
+Overlapping Coverage History files are deduplicated by cover account + Deal ID during analysis.
+
+GROUP 5
+-------
+Group 5 automatically discovers all saved weeks.
+Choose a week from the Trading Week selector.
+It shows:
+- Company-wide Top 5 Winners
+- Company-wide Top 5 Losers
+- Top 5 by branch
+- Branch completeness status
+- Unmatched coverage warning count
+
+The company-wide calculation nets each login across all saved branches for the selected week before ranking.
+
+DEPLOYMENT
+----------
+Replace your site's:
+- index.html
+- app.js
+- styles.css
+
+IMPORTANT:
+app.js intentionally contains:
+apiKey: "YOUR_FIREBASE_API_KEY"
+
+Copy the REAL apiKey from your current live app.js / Firebase project before publishing.
+All other Firebase project values are already set to the existing project details supplied previously.

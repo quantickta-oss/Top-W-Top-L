@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>P/L SYSTEM — Weekly Dealer Risk Dashboard</title>
-  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="styles.css?v=20260916b">
 </head>
 <body>
   <aside class="sidebar">
@@ -123,10 +123,15 @@
           <h1>Group 5 — Executive Dashboard</h1>
           <p class="subtitle">True weekly Top 5 calculated from every client in each saved branch report.</p>
         </div>
-        <label class="week-select-control">
-          <span>TRADING WEEK</span>
-          <select id="executive-week-select" class="control" onchange="selectExecutiveWeek(this.value)"></select>
-        </label>
+        <div class="header-actions">
+          <label class="week-select-control">
+            <span>TRADING WEEK</span>
+            <select id="executive-week-select" class="control" onchange="selectExecutiveWeek(this.value)"></select>
+          </label>
+          <button id="clear-everything-btn" class="danger-btn clear-all-btn" onclick="clearEverything()">
+            CLEAR EVERYTHING
+          </button>
+        </div>
       </div>
 
       <div id="executive-source-status" class="source-status"></div>
@@ -181,6 +186,6 @@
 
   <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
-  <script src="app.js"></script>
+  <script src="app.js?v=20260916b"></script>
 </body>
 </html>
